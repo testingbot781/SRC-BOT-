@@ -1,96 +1,130 @@
-#!/usr/bin/env python3
-import os
-import asyncio
-import tempfile
-from pathlib import Path
-from datetime import datetime
-from yt_dlp import YoutubeDL
+import os, aiohttp, asyncio, math, psutil, shutil
 from pyrogram import Client, filters
-import motor.motor_asyncio
+from pyrogram.errors import FloodWait
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-API_ID = int(os.environ.get("API_ID"))
-API_HASH = os.environ.get("API_HASH")
-MONGO_URL = os.environ.get("MONGO_URL")
+# ========= CONFIG ===========
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+MONGO_URL = os.getenv("MONGO_URL")
 
 OWNER_ID = 1598576202
-FORCE_SUB = "serenaunzipbot"
 LOGS_CHANNEL = -1003286415377
+FORCE_SUB_LINK = "https://t.me/serenaunzipbot"
 
-TMP = Path("/tmp/dl")
-TMP.mkdir(exist_ok=True)
+# ========= CLIENT ===========
+app = Client("direct_url_downloader", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-mongo = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URL).get_default_database()
+# ========= UTILITIES =========
+async def progress_bar(current, total):
+    filled_length = int(18 * current / total)
+    bar = "●" * filled_length + "○" * (18 - filled_length)
+    percent = (current / total) * 100
+    return bar, percent
 
-app = Client("dlbot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+async def humanbytes(size):
+    # nicely formatted
+    for unit in ['B','KB','MB','GB','TB']:
+        if size < 1024: return f"{size:.2f} {unit}"
+        size /= 1024
 
-
-async def log(text):
+async def check_fsub(client, message):
     try:
-        await app.send_message(LOGS_CHANNEL, text)
+        user = await client.get_chat_member("@serenaunzipbot", message.from_user.id)
+        if user.status in ["member","administrator","creator"]:
+            return True
+        else:
+            return False
     except:
-        pass
-
-
-async def force_check(uid):
-    try:
-        m = await app.get_chat_member(FORCE_SUB, uid)
-        return m.status not in ("left", "kicked")
-    except:
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔔 Join Updates Channel", url=FORCE_SUB_LINK)]])
+        await message.reply_text("⭐ Bot use karne se pehle join karlo Update Channel!", reply_markup=keyboard)
         return False
 
+# ============== COMMANDS ==================
+@app.on_message(filters.command("start"))
+async def start_cmd(client, message):
+    if not await check_fsub(client, message): return
+    text = (
+        "Hey 👋, I'm your **Direct URL Downloader Bot!**\n\n"
+        "Just send me any direct stream/download link & I'll fetch and send the file to you.\n"
+        "Use /help for instructions."
+    )
+    btn = InlineKeyboardMarkup([
+        [InlineKeyboardButton("👑 Owner", url="https://t.me/technicalserena")],
+        [InlineKeyboardButton("💬 Updates Channel", url=FORCE_SUB_LINK)]
+    ])
+    await message.reply_text(text, disable_web_page_preview=True, reply_markup=btn)
 
-async def dl(url):
-    out = str(TMP / "%(id)s.%(ext)s")
-    y = YoutubeDL({"outtmpl": out, "format": "best", "quiet": True, "noplaylist": True})
-    info = y.extract_info(url, download=True)
-    if "entries" in info:
-        info = info["entries"][0]
-    return y.prepare_filename(info), info
+@app.on_message(filters.command("help"))
+async def help_cmd(client, message):
+    if not await check_fsub(client, message): return
+    await message.reply_text(
+        "**Usage:**\n\n"
+        "🔗 Send me a direct downloadable URL (mp4, zip, etc)\n"
+        "📥 I’ll download it and send back to you privately.\n\n"
+        "**Commands:**\n"
+        "/help - Show this help\n"
+        "/status - Owner only (Bot CPU, RAM, Disk)\n",
+        disable_web_page_preview=True)
 
+@app.on_message(filters.command("status") & filters.user(OWNER_ID))
+async def status_cmd(client, message):
+    cpu = psutil.cpu_percent()
+    mem = psutil.virtual_memory().percent
+    disk = psutil.disk_usage('/').percent
+    uptime = shutil.disk_usage("/")
+    await message.reply_text(
+        f"**System Status ⚙️**\n"
+        f"CPU: {cpu}%\n"
+        f"RAM: {mem}% used\n"
+        f"Disk: {disk}% used\n"
+    )
 
-@app.on_message(filters.command("start") & filters.private)
-async def start(_, m):
-    await m.reply("Send link.")
-
-
-@app.on_message(filters.private & ~filters.service)
-async def handle(_, m):
-    uid = m.from_user.id
-    url = m.text
-
-    if not await force_check(uid):
-        return await m.reply(f"Join first: https://t.me/{FORCE_SUB}")
-
-    await log(f"{uid} -> {url}")
+# ============== MAIN DOWNLOADER ===============
+@app.on_message(filters.private & ~filters.command(["start","help","status"]))
+async def downloader(client, message: Message):
+    if not await check_fsub(client, message): return
+    url = message.text.strip()
+    msg = await message.reply_text(f"📥 Starting Download...\n`{url}`")
 
     try:
-        fp, info = await asyncio.get_event_loop().run_in_executor(None, lambda: asyncio.run(dl(url)))
-    except:
-        await log("Download error")
-        return await m.reply("Failed.")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                size = int(resp.headers.get('Content-Length', 0))
+                file_name = url.split("/")[-1]
+                with open(file_name, "wb") as f:
+                    downloaded = 0
+                    chunk = 1024 * 1024
+                    while True:
+                        data = await resp.content.read(chunk)
+                        if not data: break
+                        f.write(data)
+                        downloaded += len(data)
+                        bar, percent = await progress_bar(downloaded, size)
+                        done_mb = await humanbytes(downloaded)
+                        total_mb = await humanbytes(size)
+                        sp = f"Downloading\n`{file_name}`\n[{bar}] \n◌Progress😉:〘 {percent:.2f}% 〙\nDone:〘{done_mb} of {total_mb}〙"
+                        try:
+                            await msg.edit_text(sp)
+                        except FloodWait as e:
+                            await asyncio.sleep(e.value)
+                await msg.edit_text("✅ Downloaded Successfully. Uploading...")
 
-    size = Path(fp).stat().st_size
-    cap = f"{info.get('title','file')} — {round(size/1024/1024,2)}MB"
-
-    try:
-        await app.send_document(uid, fp, caption=cap)
-        await log(f"Sent {fp}")
-    except:
-        await log("Send error")
-        await m.reply("Send failed.")
-    finally:
-        Path(fp).unlink(missing_ok=True)
-
-    try:
-        await mongo.logs.update_one(
-            {"uid": uid},
-            {"$inc": {"count": 1}, "$set": {"last": datetime.utcnow()}},
-            upsert=True,
+        send_msg = await client.send_document(
+            message.from_user.id,
+            file_name,
+            caption=f"File: `{file_name}`"
         )
-    except:
-        pass
 
+        os.remove(file_name)
+        await msg.delete()
+        await client.send_message(LOGS_CHANNEL, f"📤 File Sent to {message.from_user.mention} — `{file_name}`")
 
-if __name__ == "__main__":
-    app.run()
+    except Exception as e:
+        await message.reply_text(f"❌ Error: `{e}`")
+        await client.send_message(LOGS_CHANNEL, f"⚠️ Exception: {e}")
+
+# ==============================================
+print("🤖 Bot Running...")
+app.run()
