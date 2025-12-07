@@ -4,3 +4,4 @@ aiohttp
 psutil
 flask
 pymongo
+instaloader
