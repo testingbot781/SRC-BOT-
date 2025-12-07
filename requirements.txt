@@ -1,3 +1,7 @@
-pyrogram
+pyrogram==2.0.49
 tgcrypto
-flask
+yt-dlp==2025.10.01
+motor==3.1.1
+python-dotenv==1.0.0
+aiohttp==3.8.4
+aiofiles==23.1.0
