@@ -1,7 +1,5 @@
-# requirements.txt
-pyrogram==2.0.49
+pyrogram==2.0.106
 tgcrypto
-yt-dlp
-motor
-python-dotenv
 aiohttp
+psutil
+moviepy
