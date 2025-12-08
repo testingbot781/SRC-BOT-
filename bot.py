@@ -5,7 +5,7 @@ from pyrogram.errors import FloodWait, UserNotParticipant, UserIsBlocked
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pymongo import MongoClient
 
-# ---- Render log flush ----
+# ---- Flush Render logs instantly ----
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
@@ -48,175 +48,152 @@ def fmt_time(sec):
     if m:return f"{m} m {s} s"
     return f"{s} s"
 
-emoji_cycle = itertools.cycle(["😉","😎","🤗","🥰","🤓","😜","🤩"])
+emoji_cycle=itertools.cycle(["😉","😎","🤗","🥰","🤓","😜","🤩"])
 def fancy_bar(name,phase,done,total,speed):
     pct=done/total*100 if total else 0
     filled=int(18*pct/100)
     bar="●"*filled+"○"*(18-filled)
     face=next(emoji_cycle)
     eta=fmt_time((total-done)/speed if speed>0 else 0)
-    return(
-        f"*{phase}*\n"
-        f"*{name}*\n"
-        f"[{bar}]\n"
-        f"◌Progress{face}: {pct:.2f}%\n"
-        f"✅ {fmt_size(done)} of {fmt_size(total)}\n"
-        f"🚀 {fmt_size(speed)}/s  ⏳ {eta}"
-    )
+    return(f"{phase}\n{name}\n[{bar}]\n"
+           f"◌Progress{face}: {pct:.2f}%\n"
+           f"Done: {fmt_size(done)} of {fmt_size(total)}\n"
+           f"Speed🚀: {fmt_size(speed)}/s | ETA⏳: {eta}")
 
 async def ensure_user(uid):
     if not users.find_one({"_id":uid}):
         users.insert_one({"_id":uid,"opt":"video","caption":""})
 
 async def log_msg(t):
-    try: await bot.send_message(LOGS_CH, t)
+    try: await bot.send_message(LOGS_CH,t)
     except: pass
 async def log_file(path,cap):
-    try: return await bot.send_document(LOGS_CH, path, caption=cap)
+    try: return await bot.send_document(LOGS_CH,path,caption=cap)
     except: return None
 
-# ---- START ----
+# ---- START / HELP ----
 @bot.on_message(filters.command("start"))
 async def start(_,m):
     await ensure_user(m.from_user.id)
     kb=InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 Join Update Channel",url=FORCE_LINK)],
-        [InlineKeyboardButton("💬 Contact Owner",url="https://t.me/technicalserena")]
+        [InlineKeyboardButton("📢 Join Channel",url=FORCE_LINK)],
+        [InlineKeyboardButton("💬 Owner",url="https://t.me/technicalserena")]
     ])
-    txt=("🌷 *Welcome to SERENA Downloader!* 🌷\n\n"
-         "✨ Paste any direct link or `.m3u8` stream URL — I'll fetch it for you.\n"
-         "🎞 Watch my animated ETA bar while downloading!\n"
-         "🧭 Use /help for commands 💖")
-    await m.reply_text(txt, reply_markup=kb, parse_mode="markdownv2")
+    msg=("🌷 Welcome to SERENA Downloader 🌷\n\n"
+         "Send a direct file or stream (.m3u8) link and watch magic happen!\n\n"
+         "Use /help for full command list.")
+    await m.reply_text(msg,reply_markup=kb)
 
-# ---- HELP ----
 @bot.on_message(filters.command("help"))
 async def help_cmd(_,m):
-    txt=("🌸 *How to Use SERENA*\n\n"
-         "🧿 Send a direct URL (mp4/zip) or `.m3u8` stream.\n"
-         "🎞 Enjoy an animated ETA bar during download.\n"
-         "📦 Your file is delivered and logged for backup.\n\n"
-         "⚙️ Commands\n"
-         "`/start` – welcome menu\n"
-         "`/help` – guide\n"
-         "`/settings` – upload + caption settings\n"
-         "`/file <word>` – search files\n"
-         "`/status` – owner system stats\n"
-         "`/database` – Mongo usage (Owner)\n"
-         "`/clear` – flush database (Owner)\n"
-         "`/broadcast <text>` – owner mass message\n"
-         "`/cancel` – stop current task")
-    await m.reply_text(txt, parse_mode="markdownv2")
+    txt=("Commands\n"
+         "/start - Welcome message\n"
+         "/help - This text\n"
+         "/settings - Upload & caption options\n"
+         "/file <word> - Search DB\n"
+         "/status - Owner system status\n"
+         "/database - Mongo usage (owner)\n"
+         "/clear - Reset DB (owner)\n"
+         "/broadcast <text> - Message all users\n"
+         "/cancel - Stop current task")
+    await m.reply_text(txt)
 
 # ---- SETTINGS (mode + caption) ----
 @bot.on_message(filters.command("settings"))
 async def settings(_,m):
     await ensure_user(m.from_user.id)
     u=users.find_one({"_id":m.from_user.id})
-    opt=u.get("opt","video"); cap=u.get("caption","")
-    desc=("⚙️ *SERENA Settings*\n\n"
-          "Choose upload mode and optionally set a caption 💖")
+    opt=u.get("opt","video")
+    cap=u.get("caption","")
+    desc="Settings:\n\nSelect upload type and add optional caption."
     kb=[
         [InlineKeyboardButton("🎥 Upload as Video"+(" ✅" if opt=="video" else ""),callback_data="vid")],
         [InlineKeyboardButton("📄 Upload as Document"+(" ✅" if opt=="doc" else ""),callback_data="doc")],
         [InlineKeyboardButton("➕ Add Caption",callback_data="add_cap"),
          InlineKeyboardButton("♻️ Reset Caption",callback_data="clr_cap")]
     ]
-    msg=f"{desc}\n\n🖋 *Current Caption:* `{cap if cap else 'None'}`"
-    await m.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="markdownv2")
+    msg=f"{desc}\n\nCurrent caption: {cap if cap else 'None'}"
+    await m.reply_text(msg,reply_markup=InlineKeyboardMarkup(kb))
 
 @bot.on_callback_query()
 async def settings_cb(_,q):
-    uid=q.from_user.id
-    data=q.data
+    uid=q.from_user.id; data=q.data
     await ensure_user(uid)
     if data in ("vid","doc"):
         mode="video" if data=="vid" else "doc"
         users.update_one({"_id":uid},{"$set":{"opt":mode}})
-        await q.answer("✅ Updated mode")
-        await q.message.reply_text(f"✨ Mode set to {'🎥 Video' if mode=='video' else '📄 Document'}")
+        await q.message.reply_text(f"Mode set to {mode.upper()}")
     elif data=="add_cap":
         users.update_one({"_id":uid},{"$set":{"waiting_cap":True}})
-        await q.message.reply_text("🖋 Send me the new caption text (ex: `01\\. My Title`)", parse_mode="markdownv2")
+        await q.message.reply_text("Send the new caption now.")
     elif data=="clr_cap":
         users.update_one({"_id":uid},{"$set":{"caption":""}})
-        await q.message.reply_text("♻️ Caption cleared.")
+        await q.message.reply_text("Caption cleared.")
     await q.answer()
 
-# ---- CAPTION INPUT ----
 @bot.on_message(filters.private & filters.text)
-async def get_caption(_,m):
+async def caption_or_link(_,m):
     u=users.find_one({"_id":m.from_user.id})
     if u and u.get("waiting_cap"):
         users.update_one({"_id":m.from_user.id},{"$set":{"caption":m.text,"waiting_cap":False}})
-        await m.reply_text(f"✅ Caption saved → `{m.text}`", parse_mode="markdownv2")
-        return
-    await detect(_,m)  # normal flow
+        return await m.reply_text(f"Caption set → {m.text}")
+    await detect(_,m)
 
 # ---- STATUS ----
 @bot.on_message(filters.command("status") & filters.user(OWNER_ID))
 async def status_cmd(_,m):
     total=users.count_documents({})
-    ram, cpu = psutil.virtual_memory().percent, psutil.cpu_percent()
-    disk = psutil.disk_usage("/")
-    free_mb = disk.free//(1024*1024)
-    latency_start=time.time(); await bot.send_chat_action(m.chat.id,"typing")
+    ram=psutil.virtual_memory().percent
+    cpu=psutil.cpu_percent()
+    disk=psutil.disk_usage("/")
+    free=disk.free//(1024*1024)
+    latency_start=time.time()
+    await bot.send_chat_action(m.chat.id,"typing")
     latency=(time.time()-latency_start)*1000
-    msg=(f"📊 *#STATUS*\n\n"
-         f"👥 *Users:* {total}\n"
-         f"🧠 *RAM:* {ram:.1f}%\n"
-         f"🖥 *CPU:* {cpu:.1f}%\n"
-         f"💾 *Free:* {free_mb} MB\n"
-         f"⏳ *Ping:* {int(latency)} ms")
-    await m.reply_text(msg, parse_mode="markdownv2")
+    txt=(f"Status:\nUsers: {total}\nCPU: {cpu:.1f}% | RAM: {ram:.1f}%\n"
+         f"Free: {free} MB | Ping: {int(latency)} ms")
+    await m.reply_text(txt)
 
-# ---- DATABASE INFO ----
+# ---- DATABASE & CLEAR ----
 @bot.on_message(filters.command("database") & filters.user(OWNER_ID))
 async def database_info(_,m):
     stats=db.command("dbstats")
     used=round(stats["fsUsedSize"]/(1024*1024),2)
     total=round(stats["fileSize"]/(1024*1024),2)
     free=round(total-used,2)
-    txt=(f"🗄 *Mongo DB Usage*\n\n📦 *Used:* {used} MB\n"
-         f"💾 *Free:* {free} MB\n🧮 *Total:* {total} MB")
-    await m.reply_text(txt, parse_mode="markdownv2")
+    await m.reply_text(f"Mongo usage:\nUsed: {used} MB\nFree: {free} MB\nTotal: {total} MB")
 
-# ---- CLEAR DB ----
 @bot.on_message(filters.command("clear") & filters.user(OWNER_ID))
 async def clear_db(_,m):
     users.drop(); files.drop()
-    await m.reply_text("🧹 Database collections cleared successfully.")
+    await m.reply_text("Database cleared.")
 
 # ---- BROADCAST ----
 @bot.on_message(filters.command("broadcast") & filters.user(OWNER_ID))
 async def broadcast(_,m):
-    if len(m.command)<2:
-        return await m.reply_text("Usage: `/broadcast <message>`", parse_mode="markdownv2")
-    text=m.text.split(" ",1)[1]; sent=fail=0
-    note=await m.reply_text("📣 Broadcast started …")
+    if len(m.command)<2:return await m.reply_text("Usage: /broadcast <message>")
+    msg=m.text.split(" ",1)[1]
+    sent=fail=0
     for u in users.find({}):
-        try:
-            await bot.send_message(u["_id"],text);sent+=1
-        except UserIsBlocked: fail+=1
-        except Exception: fail+=1
+        try: await bot.send_message(u["_id"],msg); sent+=1
+        except (UserIsBlocked,Exception): fail+=1
         await asyncio.sleep(0.05)
-    rep=f"✅ Broadcast done\n✨ Sent: {sent}\n🚫 Failed: {fail}"
-    await note.edit_text(rep)
+    await m.reply_text(f"Broadcast done\nSent: {sent}\nFailed: {fail}")
 
 # ---- FILE SEARCH ----
 @bot.on_message(filters.command("file"))
 async def file_cmd(_,m):
-    if len(m.command)<2: return await m.reply_text("Usage: /file <keyword>")
+    if len(m.command)<2:return await m.reply_text("Usage: /file <keyword>")
     key=m.text.split(" ",1)[1]
-    fs=list(files.find({"name":{"$regex":key,"$options":"i"}}))
-    if not fs: return await m.reply_text("❌ No matches found.")
-    await m.reply_text(f"📂 Found {len(fs)} files, sending …")
-    for f in fs:
+    data=list(files.find({"name":{"$regex":key,"$options":"i"}}))
+    if not data:return await m.reply_text("No match found.")
+    await m.reply_text(f"Found {len(data)} result(s).")
+    for f in data:
         fid=f["file_id"]
         try:
-            await bot.send_video(m.chat.id,fid,caption=f["name"])
+            await bot.send_video(m.chat.id,fid,caption=f.get("caption") or f["name"])
         except Exception:
-            await bot.send_document(m.chat.id,fid,caption=f["name"])
+            await bot.send_document(m.chat.id,fid,caption=f.get("caption") or f["name"])
         await asyncio.sleep(1)
 
 # ---- CANCEL ----
@@ -224,19 +201,19 @@ cancel={}
 @bot.on_message(filters.command("cancel"))
 async def cancel_cmd(_,m):
     cancel[m.from_user.id]=True
-    await m.reply_text("🛑 Cancelling current task…")
+    await m.reply_text("Cancelled current task.")
 
-# ---- DOWNLOAD UTILITIES ----
+# ---- DOWNLOAD UTILS ----
 async def m3u8_to_mp4(url,out):
-    cmd=f'ffmpeg -y -i "{url}" -c copy "{out}"'
-    p=await asyncio.create_subprocess_shell(cmd,stdout=asyncio.subprocess.DEVNULL,stderr=asyncio.subprocess.DEVNULL)
-    await p.communicate(); return os.path.exists(out)
+    cmd=f'ffmpeg -y -i \"{url}\" -c copy \"{out}\"'
+    proc=await asyncio.create_subprocess_shell(cmd,stdout=asyncio.subprocess.DEVNULL,stderr=asyncio.subprocess.DEVNULL)
+    await proc.communicate(); return os.path.exists(out)
 
 async def insta_dl(url,out):
     try:
         import instaloader,re
         L=instaloader.Instaloader(save_metadata=False)
-        if INSTA_SESSION: L.load_session_from_file("",INSTA_SESSION)
+        if INSTA_SESSION:L.load_session_from_file("",INSTA_SESSION)
         sc=re.search(r"/p/([^/?]+)/",url)
         if not sc:return False
         post=instaloader.Post.from_shortcode(L.context,sc.group(1))
@@ -246,28 +223,28 @@ async def insta_dl(url,out):
                 os.rename(os.path.join(os.path.dirname(out),f),out)
                 return True
         return False
-    except Exception as e:
-        print("insta_err:",e); return False
+    except Exception: return False
 
 # ---- MAIN DOWNLOADER ----
 async def process(url,m):
     uid=m.from_user.id
-    data=users.find_one({"_id":uid}) or {}
-    mode=data.get("opt","video"); caption=data.get("caption","")
+    user=users.find_one({"_id":uid}) or {}
+    mode=user.get("opt","video")
+    caption=user.get("caption","")
     tmp=tempfile.gettempdir()
     name="file.bin"; path=os.path.join(tmp,name)
-    msg=await m.reply_text("📥 Starting download …")
+    msg=await m.reply_text("Starting download …")
     try:
         if ".m3u8" in url:
             name="video.mp4"; path=os.path.join(tmp,name)
-            await msg.edit_text("🎞️ **Fetching M3U8 stream …**")
+            await msg.edit_text("Fetching M3U8 stream …")
             ok=await m3u8_to_mp4(url,path)
-            if not ok: return await msg.edit_text("⚠️ Failed to fetch stream!")
+            if not ok:return await msg.edit_text("Failed to fetch M3U8 stream.")
         elif "instagram.com" in url:
             name="insta.mp4"; path=os.path.join(tmp,name)
-            await msg.edit_text("📸 **Fetching Instagram video …**")
+            await msg.edit_text("Fetching Instagram video …")
             ok=await insta_dl(url,path)
-            if not ok: return await msg.edit_text("⚠️ Cannot download Instagram video.")
+            if not ok:return await msg.edit_text("Failed to download Instagram video.")
         else:
             async with aiohttp.ClientSession() as s:
                 async with s.get(url,allow_redirects=True) as r:
@@ -284,47 +261,40 @@ async def process(url,m):
                     done,start,last=0,time.time(),0
                     with open(path,"wb") as f:
                         async for chunk in r.content.iter_chunked(1024*512):
-                            if cancel.get(uid):
-                                await msg.edit_text("🛑 Cancelled by user"); return
+                            if cancel.get(uid): await msg.edit_text("Cancelled."); return
                             f.write(chunk); done+=len(chunk)
                             now=time.time()
                             if now-last>10:
                                 spd=done/max(now-start,1)
-                                try: await msg.edit_text(fancy_bar(name,"⬇️ Downloading",done,total,spd), parse_mode="markdownv2")
+                                try: await msg.edit_text(fancy_bar(name,"Downloading",done,total,spd))
                                 except FloodWait as e: await asyncio.sleep(e.value)
                                 except: pass
                                 last=now
-        await msg.edit_text("📦 **Uploading backup to Logs …**")
-        caption_final=(caption+"\n" if caption else "")+f"`{name}`"
-        logm=await log_file(path,f"📦 Backup:{name}\n\n{caption_final}")
-        await msg.edit_text("📤 **Uploading to you …**")
+        await msg.edit_text("Uploading backup to Logs …")
+        fincap=(caption+"\n" if caption else "")+name
+        logm=await log_file(path,f"Backup: {name}\n{fincap}")
+        await msg.edit_text("Uploading to you …")
         if mode=="video":
-            await bot.send_video(uid,path,caption=caption_final)
+            await bot.send_video(uid,path,caption=fincap)
         else:
-            await bot.send_document(uid,path,caption=caption_final)
+            await bot.send_document(uid,path,caption=fincap)
         files.insert_one({"name":name,"file_id":logm.document.file_id,"type":mode,"caption":caption})
         await msg.delete()
-        await log_msg(f"✅ Delivered {name} to {uid}")
     except Exception as e:
-        await msg.edit_text(f"❌ Error {e}")
-        await log_msg(str(e))
+        await msg.edit_text(f"Error: {e}")
     finally:
-        try: os.remove(path)
-        except: pass
+        if os.path.exists(path): os.remove(path)
         cancel[uid]=False
 
-# ---- DETECTOR ----
+# ---- WRONG COMMAND/LINK GUIDE ----
 @bot.on_message(filters.text & ~filters.command(
     ["start","help","status","file","settings","clear","database","broadcast","cancel"]))
 async def detect(_,m):
     txt=m.text.strip()
-    for url in txt.split():
-        if url.startswith("http"):
-            await process(url,m); return
-    example=("❓ That doesn't look like a valid link or command.\n\n"
-             "👉 *Example:* `https://example.com/video.mp4`\n\n"
-             "Use */help* for instructions 🌸")
-    await m.reply_text(example, parse_mode="markdownv2")
+    for u in txt.split():
+        if u.startswith("http"):
+            await process(u,m); return
+    await m.reply_text("That doesn't look like a valid link.\nExample: https://example.com/video.mp4\nUse /help for info.")
 
 # ---- RUN ----
 if __name__=="__main__":
