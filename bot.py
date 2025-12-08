@@ -5,7 +5,7 @@ from pyrogram.errors import FloodWait, UserNotParticipant, UserIsBlocked
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pymongo import MongoClient
 
-# Flush logs instantly for Render
+# flush Render logs instantly
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
@@ -41,30 +41,26 @@ def fmt_size(n):
         n /= 1024
     return f"{n:.2f}PB"
 
-def fmt_time(s):
-    if s<=0:return "<1 s"
-    m,s=divmod(int(s),60);h,m=divmod(m,60)
-    if h:return f"{h} h {m} m {s} s"
-    if m:return f"{m} m {s} s"
+def fmt_time(sec):
+    if sec<=0: return "<1 s"
+    m,s=divmod(int(sec),60);h,m=divmod(m,60)
+    if h: return f"{h} h {m} m {s} s"
+    if m: return f"{m} m {s} s"
     return f"{s} s"
 
 emoji_cycle = itertools.cycle(["😉","😎","🤗","🥰","🤓","😜","🤩"])
 def fancy_bar(name,phase,done,total,speed):
-    pct=done/total*100 if total else 0
-    filled=int(18*pct/100)
-    bar_str="●"*filled+"○"*(18-filled)
-    face=next(emoji_cycle)
-    eta=fmt_time((total-done)/speed if speed>0 else 0)
-    return(
-        f"**{phase}**\n"
-        f"**{name}**\n"
-        f"to my server\n"
-        f"[{bar_str}]\n"
-        f"◌Progress{face}:〘 {pct:.2f}% 〙\n"
-        f"Done: 〘{fmt_size(done)} of {fmt_size(total)}〙\n"
-        f"◌Speed🚀: 〘{fmt_size(speed)}/s〙\n"
-        f"◌Time Left⏳: 〘{eta}〙"
-    )
+    pct = done/total*100 if total else 0
+    filled = int(18*pct/100)
+    bar = "●"*filled + "○"*(18-filled)
+    face = next(emoji_cycle)
+    eta = fmt_time((total-done)/speed if speed>0 else 0)
+    return (f"**{phase}**\n**{name}**\n"
+            f"to my server\n[{bar}]\n"
+            f"◌Progress{face}:〘 {pct:.2f}% 〙\n"
+            f"Done: 〘{fmt_size(done)} of {fmt_size(total)}〙\n"
+            f"◌Speed🚀: 〘{fmt_size(speed)}/s〙\n"
+            f"◌Time Left⏳: 〘{eta}〙")
 
 async def ensure_user(uid):
     if not users.find_one({"_id":uid}):
@@ -85,31 +81,28 @@ async def start(_,m):
         [InlineKeyboardButton("📢 Join Update Channel",url=FORCE_LINK)],
         [InlineKeyboardButton("💬 Contact Owner",url="https://t.me/technicalserena")]
     ])
-    welcome=(
-        "🌷 **Welcome to SERENA Downloader!** 🌷\n\n"
-        "✨ Paste any direct download link or an `.m3u8` stream URL and I’ll fetch it for you.\n"
-        "🎞 Files are sent to you and kept safe in logs.\n\n"
-        "🧭 Use `/help` for guidelines 💖"
-    )
+    welcome=("🌷 **Welcome to SERENA Downloader!**\n\n"
+             "✨ Paste any direct download link or `.m3u8` stream URL — I’ll fetch it for you.\n"
+             "🎞 All files are sent here and a backup is kept in Logs.\n"
+             "🧭 Use `/help` to see all commands 💖")
     await m.reply_text(welcome,reply_markup=kb)
 
 # ---------- /HELP ----------
 @bot.on_message(filters.command("help"))
 async def help_cmd(_,m):
-    txt=(
-        "🌸 **How to Use SERENA**\n\n"
-        "🧿 Send any *direct URL* (mp4/zip) or `.m3u8` stream.\n"
-        "🎞 Watch the animated ETA bar while I download.\n"
-        "📦 Each file is delivered to you and saved in Logs.\n\n"
-        "⚙️ Commands:\n"
-        "`/start` – welcome menu\n"
-        "`/help` – this guide\n"
-        "`/settings` – choose upload mode\n"
-        "`/status` – owner system stats\n"
-        "`/file <name>` – search files\n"
-        "`/broadcast <text>` – owner mass message\n"
-        "`/cancel` – stop current task"
-    )
+    txt=("🌸 **How to Use SERENA**\n\n"
+         "🧿 Send a *direct URL* (mp4/zip etc.) or `.m3u8` link.\n"
+         "🎞 Watch my animated progress bar during download.\n"
+         "📦 Each file is sent to you and archived in Logs.\n\n"
+         "⚙️ Commands:\n"
+         "`/start` – welcome menu\n"
+         "`/help` – this guide\n"
+         "`/settings` – choose upload mode\n"
+         "`/status` – owner system stats\n"
+         "`/file <name>` – search files\n"
+         "`/batch` – download many links at once\n"
+         "`/broadcast <text>` – owner mass message\n"
+         "`/cancel` – stop current task")
     await m.reply_text(txt)
 
 # ---------- /SETTINGS ----------
@@ -137,7 +130,7 @@ async def cb_mode(_,q):
         f"✨ Mode set to {'🎥 Video' if val=='video' else '📄 Document'}"
     )
 
-# ---------- /STATUS ----------
+# ---------- /STATUS (fixed) ----------
 @bot.on_message(filters.command("status") & filters.user(OWNER_ID))
 async def status_cmd(_,m):
     total = users.count_documents({})
@@ -147,17 +140,17 @@ async def status_cmd(_,m):
     cpu = psutil.cpu_percent()
     disk = psutil.disk_usage('/')
     free_mb = disk.free // (1024 * 1024)
-    ping_start = time.time(); await bot.send_chat_action(m.chat.id,"typing")
-    latency = (time.time() - ping_start) * 1000
+    start = time.time(); await bot.send_chat_action(m.chat.id,"typing")
+    latency = (time.time()-start)*1000
     speed = "10 MB/SEC"
-    text = (
+    text=(
         "📊 **#STATUS**\n\n"
         f"👤 *Total Users:* {total}\n"
         f"🟢 *Active (3 days):* {active}\n"
         f"🚫 *Blocked:* {blocked}\n"
         f"🧠 *RAM:* {ram:.1f}%\n"
         f"🖥 *CPU:* {cpu:.1f}%\n"
-        f"💾 *Storage Free:* {free_mb} MB\n"
+        f"💾 *Free Storage:* {free_mb} MB\n"
         f"⏳ *Ping:* {int(latency)} ms 😚\n"
         f"🤗 *SPEED:* {speed}"
     )
@@ -174,10 +167,8 @@ async def broadcast(_,m):
     for u in users.find({}):
         try:
             await bot.send_message(u["_id"],text); sent+=1
-        except UserIsBlocked:
-            fail+=1
-        except Exception:
-            fail+=1
+        except UserIsBlocked: fail+=1
+        except Exception: fail+=1
         await asyncio.sleep(0.05)
     rep=f"✅ Broadcast done\n✨ Sent: {sent}\n🚫 Failed: {fail}"
     await m.reply_text(rep)
@@ -232,12 +223,12 @@ async def insta_dl(url,out):
     except Exception as e:
         print("insta err:",e); return False
 
-# ---------- DOWNLOADER ----------
+# ---------- SINGLE LINK DOWNLOADER ----------
 async def process(url,m):
     uid=m.from_user.id
     mode=users.find_one({"_id":uid}).get("opt","video")
     tmp=tempfile.gettempdir()
-    name="file.bin";path=os.path.join(tmp,name)
+    name="file.bin"; path=os.path.join(tmp,name)
     msg=await m.reply_text("📥 Starting download …")
     try:
         if ".m3u8" in url:
@@ -295,9 +286,48 @@ async def process(url,m):
         except: pass
         cancel[uid]=False
 
+# ---------- BATCH DOWNLOADER ----------
+@bot.on_message(filters.command("batch"))
+async def batch_download(_, m):
+    uid=m.from_user.id
+    await ensure_user(uid)
+    links=[]
+    # txt file or plain text message
+    if m.reply_to_message and m.reply_to_message.document:
+        path = await m.reply_to_message.download()
+        with open(path) as f:
+            for line in f:
+                if line.strip().startswith("http"):
+                    links.append(line.strip())
+        os.remove(path)
+    elif m.reply_to_message and m.reply_to_message.text:
+        for line in m.reply_to_message.text.splitlines():
+            if line.strip().startswith("http"):
+                links.append(line.strip())
+    else:
+        return await m.reply_text("📄 Reply to a message or `.txt` file containing links (one per line).")
+
+    if not links:
+        return await m.reply_text("⚠️ No valid links found in file or message.")
+    total = len(links)
+    progress = await m.reply_text(f"📦 **Batch Started** — {total} links queued.")
+    await progress.pin()
+    done = 0
+    for ulink in links:
+        done += 1
+        await progress.edit_text(f"🚀 **Batch Progress**\n✅ Processed {done}/{total} links.")
+        try:
+            await process(ulink, m)
+        except Exception as e:
+            await m.reply_text(f"❌ Error while processing {ulink}\n`{e}`")
+        if done < total:
+            await asyncio.sleep(12)   # rest between links
+    await progress.edit_text(f"🥳 **Batch Completed!** Processed {done}/{total} links.")
+    await progress.unpin()
+
 # ---------- DETECTOR ----------
 @bot.on_message(filters.text & ~filters.command(
-    ["start","help","status","file","settings","broadcast","cancel"]))
+    ["start","help","status","file","settings","batch","broadcast","cancel"]))
 async def detect(_,m):
     txt=m.text.strip()
     for url in txt.split():
