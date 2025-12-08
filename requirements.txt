@@ -5,3 +5,4 @@ psutil
 flask
 pymongo
 instaloader
+ffmpeg-python
