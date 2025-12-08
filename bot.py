@@ -5,7 +5,6 @@ from pyrogram.errors import FloodWait, UserNotParticipant
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pymongo import MongoClient
 
-# Flush Render logs immediately
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
@@ -21,7 +20,7 @@ FORCE_LINK="https://t.me/serenaunzipbot"
 INSTA_SESSION=os.getenv("INSTA_SESSION","")
 INSTA_COOKIES=os.getenv("INSTA_COOKIES","")
 
-# ---------- DATABASE ----------
+# ---------- DB ----------
 mongo=MongoClient(MONGO_URL)
 db=mongo["serena"]
 users=db["users"]
@@ -87,7 +86,7 @@ async def start(_,m):
     ])
     await m.reply_text(
         "💎 **SERENA Downloader** 💎\n\n"
-        "Send any direct URL or .m3u8 / Instagram video and watch me work 💞",
+        "Send any direct URL or `.m3u8`/Instagram video and watch the animated progress bar 💞",
         reply_markup=kb)
 
 # ---------- /HELP ----------
@@ -95,10 +94,10 @@ async def start(_,m):
 async def help_cmd(_,m):
     txt=(
         "🌸 **How to Use SERENA**\n\n"
-        "🧿 Send any *direct URL* (mp4, zip, etc.) or `.m3u8` stream link.\n"
-        "🎞 I’ll show an animated ETA progress bar while downloading.\n"
-        "📦 File will be sent to you and saved in my Logs channel.\n\n"
-        "⚙️ Commands:\n"
+        "• Send a direct URL (mp4/zip/etc) or `.m3u8` stream link.\n"
+        "• Watch my animated progress bar when downloading.\n"
+        "• Your file @logs is saved after upload.\n\n"
+        "⚙️ Commands\n"
         "`/start` – welcome menu\n"
         "`/help` – this guide\n"
         "`/settings` – choose upload mode\n"
@@ -114,10 +113,10 @@ async def settings(_,m):
     await ensure_user(m.from_user.id)
     opt=users.find_one({"_id":m.from_user.id}).get("opt","video")
     desc=("⚙️ **SERENA Settings**\n\n"
-          "Decide how I send your files:\n"
-          "🎥 *Upload as Video* – everything playable.\n"
-          "📄 *Upload as Document* – original form.\n\n"
-          "Tap one mode below to switch 💖")
+          "Decide how I send your files:\n"
+          "🎥 Upload as Video – everything playable\n"
+          "📄 Upload as Document – original file type\n\n"
+          "Tap below to switch 💕")
     kb=[
         [InlineKeyboardButton("🎥 Upload as Video"+(" ✅" if opt=="video" else ""),callback_data="vid")],
         [InlineKeyboardButton("📄 Upload as Document"+(" ✅" if opt=="doc" else ""),callback_data="doc")]
@@ -139,24 +138,26 @@ async def status_cmd(_,m):
     total=users.count_documents({})
     active=total
     blocked=0
-    ram, cpu = psutil.virtual_memory().percent, psutil.cpu_percent()
-    disk = psutil.disk_usage("/")
-    free_mb = disk.free // (1024*1024)
+    ram, cpu=psutil.virtual_memory().percent, psutil.cpu_percent()
+    disk=psutil.disk_usage('/')
+    free_mb=disk.free//(1024*1024)
     t0=time.time(); pong=await m.reply_text("⏳ Checking status …")
     latency=(time.time()-t0)*1000
     speed="10 MB/SEC"
-    msg=(f"📊 **#STATUS**\n\n"
-         f"👤 *Total Users:* {total}\n"
-         f"🟢 *Active (3 days):* {active}\n"
-         f"🚫 *Blocked:* {blocked}\n"
-         f"🧠 *RAM:* {ram:.1f}%\n"
-         f"🖥 *CPU:* {cpu:.1f}%\n"
-         f"💾 *Storage Free:* {free_mb} MB\n"
-         f"⏳ *Ping:* {int(latency)} ms 😚\n"
-         f"🤗 *SPEED:* {speed}")
-    await pong.edit_text(msg,parse_mode="Markdown")
+    msg=(
+        "📊 **#STATUS**\n\n"
+        f"👤 *Total Users:* {total}\n"
+        f"🟢 *Active (3 days):* {active}\n"
+        f"🚫 *Blocked:* {blocked}\n"
+        f"🧠 *RAM:* {ram:.1f}%\n"
+        f"🖥 *CPU:* {cpu:.1f}%\n"
+        f"💾 *Storage Free:* {free_mb} MB\n"
+        f"⏳ *Ping:* {int(latency)} ms 😚\n"
+        f"🤗 *SPEED:* {speed}"
+    )
+    await pong.edit_text(msg, parse_mode="markdown")
 
-# ---------- /FILE SEARCH ----------
+# ---------- /FILE ----------
 @bot.on_message(filters.command("file"))
 async def file_cmd(_,m):
     if len(m.command)<2:
@@ -182,7 +183,7 @@ async def cancel_cmd(_,m):
     cancel[m.from_user.id]=True
     await m.reply_text("🛑 Cancelling current task…")
 
-# ---------- SPECIAL DOWNLOADERS ----------
+# ---------- SPECIAL ----------
 async def m3u8_to_mp4(url,out):
     cmd=f'ffmpeg -y -i "{url}" -c copy "{out}"'
     p=await asyncio.create_subprocess_shell(cmd,stdout=asyncio.subprocess.DEVNULL,stderr=asyncio.subprocess.DEVNULL)
@@ -203,9 +204,9 @@ async def insta_dl(url,out):
                 return True
         return False
     except Exception as e:
-        print("insta err:",e); return False
+        print("insta err:",e);return False
 
-# ---------- MAIN DOWNLOADER ----------
+# ---------- DOWNLOADER ----------
 async def process(url,m):
     uid=m.from_user.id
     mode=users.find_one({"_id":uid}).get("opt","video")
@@ -239,19 +240,18 @@ async def process(url,m):
                     done,start,last=0,time.time(),0
                     with open(path,"wb") as f:
                         async for chunk in r.content.iter_chunked(1024*512):
-                            if cancel.get(uid): await msg.edit_text("🛑 Cancelled by user"); return
-                            f.write(chunk); done+=len(chunk)
+                            if cancel.get(uid):await msg.edit_text("🛑 Cancelled by user");return
+                            f.write(chunk);done+=len(chunk)
                             now=time.time()
                             if now-last>10:
                                 spd=done/max(now-start,1)
-                                try: await msg.edit_text(fancy_bar(name,"⬇️ Downloading",done,total,spd))
-                                except FloodWait as e: await asyncio.sleep(e.value)
-                                except: pass
+                                try:await msg.edit_text(fancy_bar(name,"⬇️ Downloading",done,total,spd))
+                                except FloodWait as e:await asyncio.sleep(e.value)
+                                except:pass
                                 last=now
         await msg.edit_text("📦 **Uploading backup to Logs …**")
         logm=await log_file(path,f"📦 Backup:{name}")
         await msg.edit_text("📤 **Uploading to you …**")
-        # send according to chosen mode
         if mode=="video":
             await bot.send_video(uid,path,caption=f"`{name}`",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Owner",url="https://t.me/technicalserena")]]))
@@ -277,7 +277,7 @@ async def detect(_,m):
     for url in txt.split():
         if url.startswith("http"):
             await process(url,m); return
-    await m.reply_text("😅 That doesn’t look like a link .")
+    await m.reply_text("😅 That doesn’t look like a link.")
 
 # ---------- RUN ----------
 if __name__=="__main__":
