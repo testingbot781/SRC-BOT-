@@ -235,6 +235,9 @@ async def cancel_cmd(_,m):
     cancel[m.from_user.id]=True
     await m.reply_text("🛑 Cancelling current task…")
 
+# ---------- HANDLERS ----------
+@bot.on_message(filters.private & ~filters.command(["start","help","file","cancel"]))
+
 # ---- DOWNLOADER HELPERS ----
 async def m3u8_to_mp4(url,out):
     cmd=f'ffmpeg -y -i "{url}" -c copy "{out}"'
