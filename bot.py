@@ -219,19 +219,28 @@ async def broadcast(_,m):
 async def file(_, m):
     if len(m.command) < 2:
         return await m.reply_text("Use /file <keyword>")
+
     key = " ".join(m.command[1:]).strip()
+    if not key:
+        return await m.reply_text("Use /file <keyword>")
+
     found = list(files.find({"name": {"$regex": key, "$options": "i"}}))
+
     if not found:
-        return await m.reply_text("❌ No match found in archive.")
-    await m.reply_text(f"📂 Found {len(found)} match(es) – sending…")
+        return await m.reply_text(
+            "❌ File not found in my database.\n\n"
+            "🔎 Try:\n"
+            "• Different / shorter keyword\n"
+            "• Correct spelling\n\n"
+            "If you still can't find it, it may not be available."
+        )
+
+    await m.reply_text(f"📂 Found {len(found)} file(s), sending...")
+
     for f in found:
         await m.reply_document(
             f["file_id"],
-            caption=f.get("name", ""),
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("💬 Contact Owner",
-                                       url="https://t.me/technicalserena")]]
-            )
+            caption=f.get("name", "")
         )
         await asyncio.sleep(1)
 # ---- /CANCEL ----
