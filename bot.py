@@ -215,29 +215,18 @@ async def broadcast(_,m):
     await log_msg(rep)
 
 # ---- /FILE ----
-# upar ye imports zaroor hon:
-# import asyncio
-# from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-
 @bot.on_message(filters.command("file"))
 async def file(_, m):
     if len(m.command) < 2:
         return await m.reply_text("Use /file <keyword>")
-
-    # keyword nikalna (multiple words bhi chalega)
     key = " ".join(m.command[1:]).strip()
-
-    # Mongo se search (yahan 'name' field honi chahiye)
     found = list(files.find({"name": {"$regex": key, "$options": "i"}}))
-
     if not found:
         return await m.reply_text("❌ No match found in archive.")
-
     await m.reply_text(f"📂 Found {len(found)} match(es) – sending…")
-
     for f in found:
         await m.reply_document(
-            f["file_id"],                      # DB me 'file_id' field honi chahiye
+            f["file_id"],
             caption=f.get("name", ""),
             reply_markup=InlineKeyboardMarkup(
                 [[InlineKeyboardButton("💬 Contact Owner",
