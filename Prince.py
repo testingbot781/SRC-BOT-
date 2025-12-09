@@ -216,18 +216,16 @@ async def broadcast(_,m):
 
 # ---- /FILE ----
 @bot.on_message(filters.command("file"))
-async def file_cmd(_,m):
-    if len(m.command)<2:return await m.reply_text("Usage: /file <keyword>")
+async def file(_,m):
+    if len(m.command)<2: 
+        return await m.reply_text("Use /file <keyword>")
     key=m.text.split(" ",1)[1]
-    fs=list(files.find({"name":{"$regex":key,"$options":"i"}}))
-    if not fs:return await m.reply_text("❌ No matches found.")
-    await m.reply_text(f"📂 Found {len(fs)} file(s), sending …")
-    for f in fs:
-        fid=f["file_id"]
-        try:
-            await bot.send_video(m.chat.id,fid,caption=f["name"])
-        except Exception:
-            await bot.send_document(m.chat.id,fid,caption=f["name"])
+    found=list(files.find({"name":{"$regex":key,"$options":"i"}}))
+    if not found:return await m.reply_text("❌ No match found in archive.")
+    await m.reply_text(f"📂 Found {len(found)} match(es) – sending …")
+    for f in found:
+        await bot.send_document(m.chat.id,f["file_id"],caption=f["name"],
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Contact Owner",url="https://t.me/technicalserena")]]))
         await asyncio.sleep(1)
 
 # ---- /CANCEL ----
