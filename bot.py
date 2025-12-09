@@ -227,7 +227,6 @@ async def file(_,m):
         await bot.send_document(m.chat.id,f["file_id"],caption=f["name"],
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Contact Owner",url="https://t.me/technicalserena")]]))
         await asyncio.sleep(1)
-
 # ---- /CANCEL ----
 cancel={}
 @bot.on_message(filters.command("cancel"))
