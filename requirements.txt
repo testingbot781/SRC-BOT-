@@ -6,3 +6,4 @@ psutil
 yt-dlp
 m3u8
 flask
+openai==0.28.0
