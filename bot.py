@@ -332,7 +332,6 @@ async def download_m3u8(url, dest, status_msg, uid, title):
                     last = now
     return dest
 
-
 async def get_youtube_direct(url: str):
     loop = asyncio.get_running_loop()
 
@@ -341,11 +340,25 @@ async def get_youtube_direct(url: str):
             "quiet": True,
             "skip_download": True,
             "noplaylist": True,
+            "extractor_args": {
+                "youtube": {"player_client": ["android", "web"]}
+            },
         }
         with YoutubeDL(ydl_opts) as ydl:
             return ydl.extract_info(url, download=False)
 
-    info = await loop.run_in_executor(None, _extract)
+    try:
+        info = await loop.run_in_executor(None, _extract)
+    except Exception as e:
+        msg = str(e)
+        if "Sign in to confirm you’re not a bot" in msg or \
+           "Sign in to confirm you're not a bot" in msg:
+            raise Exception(
+                "Ye YouTube video login/cookies ke bina download nahi ho sakta.\n"
+                "Is type ke anti-bot protected videos ko bot download nahi kar sakta."
+            )
+        raise Exception(f"YouTube se info nahi mil paayi: {msg}")
+
     formats = info.get("formats", [])
     best = None
     for f in formats:
@@ -358,7 +371,7 @@ async def get_youtube_direct(url: str):
             if not best or (f.get("height", 0) > best.get("height", 0)):
                 best = f
     if not best:
-        raise Exception("No progressive format found for YouTube")
+        raise Exception("YouTube ka koi direct progressive format nahi mila.")
 
     direct_url = best["url"]
     ext = best.get("ext", "mp4")
