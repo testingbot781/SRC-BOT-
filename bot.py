@@ -164,6 +164,13 @@ async def pop_q(uid):
     users.update_one({"_id":uid},{"$set":{"queue":u["queue"]}})
     return url
 
+# ---- DOWNLOADER HELPERS ----
+async def m3u8_to_mp4(url,out):
+    cmd=f'ffmpeg -y -i "{url}" -c copy "{out}"'
+    p=await asyncio.create_subprocess_shell(cmd,stdout=asyncio.subprocess.DEVNULL,stderr=asyncio.subprocess.DEVNULL)
+    await p.communicate(); return os.path.exists(out)
+            
+
 # ---------- CORE ----------
 async def process(url,m):
     uid=m.from_user.id
