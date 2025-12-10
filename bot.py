@@ -13,6 +13,7 @@ import openai
 from flask import Flask
 from pymongo import MongoClient
 from yt_dlp import YoutubeDL
+from yt_dlp.utils import DownloadError
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import FloodWait, UserIsBlocked, InputUserDeactivated, RPCError
