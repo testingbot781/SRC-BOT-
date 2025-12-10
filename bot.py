@@ -8,7 +8,7 @@ from urllib.parse import urlparse, urljoin
 import aiohttp
 import psutil
 import m3u8
-import openai
+import google.generativeai as genai
 from flask import Flask
 from pymongo import MongoClient
 from yt_dlp import YoutubeDL
@@ -30,10 +30,13 @@ FORCE_LINK = "https://t.me/serenaunzipbot"
 OWNER_CONTACT = "https://t.me/technicalserena"
 DAILY_FREE_LIMIT = 5
 
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
-if OPENAI_API_KEY:
-    openai.api_key = OPENAI_API_KEY
+# Gemini (GF chat) env
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
+# YouTube cookies (Netscape format text)
 YT_COOKIES_STR = os.environ.get("YT_COOKIES", "").strip()
 YT_COOKIE_FILE = None
 if YT_COOKIES_STR:
@@ -137,6 +140,7 @@ def get_user(uid: int):
             "caption": "",
             "blocked": False,
             "gf_mode": False,
+            "gender": "unknown",  # 'male' / 'female' / 'other'
         }
         users.insert_one(u)
     else:
@@ -263,7 +267,7 @@ def progress_text(title: str, current: int, total: int | None,
         f"Done: 〘{done_str}〙\n"
         f"◌Speed🚀:〘 {speed:.2f} MB/s 〙\n"
         f"◌Time Left⏳:〘 {eta_str} 〙"
-)
+                                        )
 # ===== DOWNLOADERS =====
 
 async def download_direct(url, dest, status_msg, uid, title, headers=None):
@@ -400,7 +404,6 @@ async def get_youtube_direct(url: str):
     loop = asyncio.get_running_loop()
 
     def _extract():
-        # Yahan hum "format" string nahi de rahe, yt-dlp khud decide karega
         ydl_opts = {
             "quiet": True,
             "skip_download": True,
@@ -669,31 +672,48 @@ async def handle_url(client, m):
             try:
                 os.remove(path)
             except Exception:
-                pass     
-# ===== GF CHAT (optional) =====
+                pass
 
-async def ai_gf_reply(user_id: int, text: str) -> str:
-    if not OPENAI_API_KEY:
-        raise Exception("GF chat disabled by owner (API key set nahi hai).")
+# ===== GF CHAT (Gemini) =====
+
+async def ai_gf_reply(user_gender: str, text: str) -> str:
+    if not GEMINI_API_KEY:
+        raise Exception("GF chat disabled by owner (GEMINI_API_KEY set nahi hai).")
+
+    if user_gender == "male":
+        persona = (
+            "a cute, romantic, caring GIRLFRIEND talking to her boyfriend. "
+            "She is female, pyari, thodi flirty, but respectful."
+        )
+    elif user_gender == "female":
+        persona = (
+            "a charming, romantic, caring BOYFRIEND talking to his girlfriend. "
+            "He is male, sweet, thoda flirty, but respectful."
+        )
+    else:
+        persona = (
+            "a romantic, caring, respectful partner. "
+            "Tone is sweet, thoda flirty, but always safe and within rules."
+        )
+
+    prompt = (
+        f"Tum {persona}\n"
+        "Hinglish (Hindi + thoda English) me short replies do.\n"
+        "No explicit adult content, no abuse, no illegal topics.\n"
+        "Thoda romantic, thoda naughty, but safe and positive.\n\n"
+        f"User: {text}\n"
+        "Reply (GF/BF):"
+    )
 
     loop = asyncio.get_running_loop()
 
-    prompt = (
-        "Tum ek pyari, thodi flirty, lekin respectful girlfriend jaisi AI ho. "
-        "Short, Hinglish style me jawab do. Gaaliya, explicit adult content, "
-        "ya Telegram rules ke khilaaf cheezon se bacho. "
-        "Hamesha positive, supportive tone rakho.\n\n"
-        f"User: {text}\nGF:"
-    )
-
     def _call():
-        resp = openai.ChatCompletion.create(
-            model=os.environ.get("OPENAI_MODEL", "gpt-3.5-turbo"),
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=300,
-            temperature=0.8,
-        )
-        return resp["choices"][0]["message"]["content"].strip()
+        model = genai.GenerativeModel(GEMINI_MODEL)
+        resp = model.generate_content(prompt)
+        # google-generativeai response
+        if hasattr(resp, "text") and resp.text:
+            return resp.text.strip()
+        return "Aaj thoda network slow hai, baad me try karo na jaanu 💕"
 
     return await loop.run_in_executor(None, _call)
 
@@ -712,8 +732,8 @@ async def start_cmd(client, m):
         "main usse download karke Telegram file/video bana dungi.\n\n"
         f"• Free Users: {DAILY_FREE_LIMIT} downloads / day\n"
         "• Premium Users: Unlimited\n\n"
-        "💞 GF Chat mode bhi hai (agar owner ne API set ki ho).\n"
-        "Use: `/gfon` ya `/gfhelp` dekho.\n\n"
+        "💞 GF/BF Chat mode bhi hai (Gemini API se).\n"
+        "Use: `/gfon`, `/gfoff`, `/gfhelp`, `/gender`.\n\n"
         "ℹ️ Full guide ke liye `/help` dekho."
     )
     await m.reply_text(txt, reply_markup=main_buttons())
@@ -724,14 +744,14 @@ async def help_cmd(client, m):
     if not await ensure_subscribed(client, m):
         return
     txt = (
-        "🌸 **SERENA – Ultimate URL Downloader + GF Chat**\n\n"
+        "🌸 **SERENA – URL Downloader + GF/BF Chat (Gemini)**\n\n"
         "🧿 **Main Kya Kar Sakti Hoon**\n"
         "• Direct downloadable links (mp4, mkv, zip, etc.) se file laati hoon.\n"
         "• `.m3u8` HLS streams ko MP4 video me convert karti hoon (non‑DRM).\n"
         "• YouTube videos ko best possible quality me download karti hoon "
-        "(public / cookie‑supported).\n"
+        "(jitna YouTube allow kare – kuch videos 403/blocked bhi ho sakte hain).\n"
         "• Har upload database me save hota hai, baad me `/file` se mil jata hai.\n"
-        "• Optional: GF/BF style chat mode (agar owner ne OPENAI_API_KEY set kiya ho).\n\n"
+        "• Optional: GF/BF style chat mode (Gemini API se).\n\n"
         "💫 **Limits & Premium**\n"
         f"• Free Users: {DAILY_FREE_LIMIT} downloads / day\n"
         "• Premium Users: Unlimited downloads\n"
@@ -743,9 +763,10 @@ async def help_cmd(client, m):
         "`/file Avengers` – title se saved files search karo\n"
         "`/plan` – apna plan, limit aur total tasks dekho\n"
         "`/cancel` – current download/ upload ko roko\n"
-        "`/gfon` – GF chat mode ON (sirf text pe baat-cheet)\n"
-        "`/gfoff` – GF chat mode OFF\n"
-        "`/gfhelp` – GF chat ka short guide\n\n"
+        "`/gender male` / `female` / `other` – apna gender set karo GF/BF chat ke liye\n"
+        "`/gfon` – GF/BF chat mode ON (text pe baat-cheet)\n"
+        "`/gfoff` – GF/BF chat mode OFF\n"
+        "`/gfhelp` – GF/BF chat ka short guide\n\n"
         "👑 **Owner Commands**\n"
         "`/status` – system + users stats\n"
         "`/database` – MongoDB usage\n"
@@ -756,8 +777,8 @@ async def help_cmd(client, m):
         "• Direct: `https://example.com/video.mp4`\n"
         "• YouTube: `https://youtu.be/abc123`\n"
         "• Stream: `https://site.com/hls/index.m3u8`\n\n"
-        "GF chat: `/gfon` likho, phir kuch bhi text bhejo (URL nahi), "
-        "main pyari GF jaisi reply dungi 😚"
+        "GF/BF chat: `/gender male` (ya female), phir `/gfon` likho, "
+        "ab normal text bhejo (URL nahi), main romantic style me reply dungi 😚"
     )
     await m.reply_text(txt)
 
@@ -766,33 +787,51 @@ async def help_cmd(client, m):
 async def gfhelp_cmd(client, m):
     if not await ensure_subscribed(client, m):
         return
-    if not OPENAI_API_KEY:
+    if not GEMINI_API_KEY:
         return await m.reply_text(
-            "GF chat mode abhi disabled hai (owner ne OPENAI_API_KEY set nahi kiya)."
+            "GF/BF chat mode abhi disabled hai (owner ne GEMINI_API_KEY set nahi kiya)."
         )
     await m.reply_text(
-        "💞 **GF Chat Mode**\n\n"
-        "• `/gfon` – GF chat mode ON karo\n"
-        "• `/gfoff` – GF chat mode OFF karo\n"
-        "• Mode ON hone ke baad jo normal text (URL nahi) bhejoge, "
-        "uska reply main ek pyari GF ki tarah dungi.\n\n"
-        "Note: Koi bhi illegal / adult explicit / abusive content allowed nahi hai."
+        "💞 **GF/BF Chat Mode (Gemini)**\n\n"
+        "1️⃣ `/gender male` – agar aap ladke ho (bot GF banega)\n"
+        "2️⃣ `/gender female` – agar aap ladki ho (bot BF banega)\n"
+        "3️⃣ `/gfon` – GF/BF chat mode ON\n"
+        "4️⃣ Normal text bhejo (URL nahi), main romantic reply dungi.\n"
+        "5️⃣ `/gfoff` – mode OFF.\n\n"
+        "Note: Koi bhi explicit adult / illegal / abusive content allowed nahi hai."
     )
+
+
+@bot.on_message(filters.command("gender") & filters.private)
+async def gender_cmd(client, m):
+    if not await ensure_subscribed(client, m):
+        return
+    if len(m.command) < 2:
+        return await m.reply_text(
+            "Use: `/gender male` ya `/gender female` ya `/gender other`"
+        )
+    val = m.command[1].lower()
+    if val not in ["male", "female", "other"]:
+        return await m.reply_text(
+            "Invalid gender.\nAllowed: `male`, `female`, `other`"
+        )
+    users.update_one({"_id": m.from_user.id}, {"$set": {"gender": val}})
+    await m.reply_text(f"✅ Gender set to **{val}**.")
 
 
 @bot.on_message(filters.command("gfon") & filters.private)
 async def gfon_cmd(client, m):
     if not await ensure_subscribed(client, m):
         return
-    if not OPENAI_API_KEY:
+    if not GEMINI_API_KEY:
         return await m.reply_text(
-            "GF chat mode abhi disabled hai (owner ne OPENAI_API_KEY set nahi kiya)."
+            "GF/BF chat mode abhi disabled hai (owner ne GEMINI_API_KEY set nahi kiya)."
         )
     users.update_one({"_id": m.from_user.id}, {"$set": {"gf_mode": True}})
     await m.reply_text(
-        "💞 GF chat mode **ON**.\n\n"
-        "Ab jo normal text (URL nahi) bhejoge, main GF jaise reply dungi.\n"
-        "Band karne ke liye `/gfoff` likho."
+        "💞 GF/BF chat mode **ON**.\n\n"
+        "Apna gender `/gender` se set karo (male/female),\n"
+        "phir normal text bhejo (URL nahi)."
     )
 
 
@@ -801,7 +840,7 @@ async def gfoff_cmd(client, m):
     if not await ensure_subscribed(client, m):
         return
     users.update_one({"_id": m.from_user.id}, {"$set": {"gf_mode": False}})
-    await m.reply_text("GF chat mode **OFF** kar diya gaya.")
+    await m.reply_text("GF/BF chat mode **OFF** kar diya gaya.")
 
 
 @bot.on_message(filters.command("settings") & filters.private)
@@ -1070,6 +1109,7 @@ async def broadcast_cmd(client, m):
             "gfon",
             "gfoff",
             "gfhelp",
+            "gender",
         ]
     )
 )
@@ -1089,12 +1129,15 @@ async def text_handler(client, m):
         return await handle_url(client, m)
 
     u = get_user(uid)
-    if OPENAI_API_KEY and u.get("gf_mode"):
+    if GEMINI_API_KEY and u.get("gf_mode"):
         try:
-            reply = await ai_gf_reply(uid, text)
+            reply = await ai_gf_reply(u.get("gender", "unknown"), text)
             await m.reply_text(reply)
-        except Exception as e:
-            await m.reply_text(f"GF chat error: {e}")
+        except Exception:
+            await m.reply_text(
+                "GF/BF chat abhi available nahi hai.\n"
+                "Owner ka Gemini API key / billing issue ho sakta hai."
+            )
         return
 
     await wrong_link(m)
