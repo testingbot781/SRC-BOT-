@@ -135,7 +135,7 @@ async def file(_,m):
         await asyncio.sleep(1)
 
 # ---------- HANDLERS ----------
-@bot.on_message(filters.private & ~filters.command(["start","help","file","cancel"]))
+@bot.on_message(filters.private & ~filters.command(["start","help","settings","file","cancel"]))
 async def queue_handle(_,m):
     url=m.text.strip()
     if not url.startswith("http"): return await m.reply_text("😅 Not a valid link.")
