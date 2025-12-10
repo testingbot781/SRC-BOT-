@@ -214,20 +214,36 @@ async def broadcast(_,m):
     await m.reply_text(rep)
     await log_msg(rep)
 
-# ---- /FILE ----
+# ---- /FILE ----# ---- /FILE ----
 @bot.on_message(filters.command("file"))
-async def file(_,m):
-    if len(m.command)<2: 
-        return await m.reply_text("Use /file <keyword>")
-    key=m.text.split(" ",1)[1]
-    found=list(files.find({"name":{"$regex":key,"$options":"i"}}))
-    if not found:return await m.reply_text("❌ No match found in archive.")
-    await m.reply_text(f"📂 Found {len(found)} match(es) – sending …")
-    for f in found:
-        await bot.send_document(m.chat.id,f["file_id"],caption=f["name"],
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Contact Owner",url="https://t.me/technicalserena")]]))
-        await asyncio.sleep(1)
+async def file(_, m):
+    if len(m.command) < 2:
+        return await m.reply_text("Use /file <keyword>")
 
+    key = m.text.split(" ", 1)[1].strip()
+
+    # search files
+    found = list(files.find({"name": {"$regex": key, "$options": "i"}}))
+
+    if not found:
+        return await m.reply_text("❌ No match found in archive.")
+
+    await m.reply_text(f"📂 Found {len(found)} match(es) — sending …")
+
+    for f in found:
+        try:
+            await bot.send_document(
+                m.chat.id,
+                f["file_id"],
+                caption=f["name"],
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💬 Contact Owner", url="https://t.me/technicalserena")]
+                ])
+            )
+        except Exception as e:
+            print("send error:", e)
+
+        await asyncio.sleep(1)
 # ---- /CANCEL ----
 cancel={}
 @bot.on_message(filters.command("cancel"))
