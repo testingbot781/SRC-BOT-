@@ -4,4 +4,5 @@ aiohttp
 pymongo[srv]
 psutil
 yt-dlp
+m3u8
 flask
