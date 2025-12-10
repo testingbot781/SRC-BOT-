@@ -398,15 +398,12 @@ async def download_m3u8(url, dest, status_msg, uid, title):
 async def get_youtube_direct(url: str):
     loop = asyncio.get_running_loop()
 
-    def _extract(fmt: str):
+    def _extract():
+        # Yahan hum koi "format" string set nahi kar rahe
         ydl_opts = {
             "quiet": True,
             "skip_download": True,
             "noplaylist": True,
-            "format": fmt,
-            "extractor_args": {
-                "youtube": {"player_client": ["android", "web"]},
-            },
         }
         if YT_COOKIE_FILE:
             ydl_opts["cookiefile"] = YT_COOKIE_FILE
@@ -414,18 +411,7 @@ async def get_youtube_direct(url: str):
             return ydl.extract_info(url, download=False)
 
     try:
-        try:
-            # Pehle progressive MP4/best try
-            info = await loop.run_in_executor(
-                None, _extract, "best[ext=mp4]/best"
-            )
-        except DownloadError as e:
-            msg = str(e)
-            if "Requested format is not available" in msg:
-                # Fallback: generic best
-                info = await loop.run_in_executor(None, _extract, "best")
-            else:
-                raise
+        info = await loop.run_in_executor(None, _extract)
     except Exception as e:
         msg = str(e)
         if ("Sign in to confirm you’re not a bot" in msg) or \
@@ -434,19 +420,48 @@ async def get_youtube_direct(url: str):
                 "Ye YouTube video login/cookies ke bina download nahi ho sakta.\n"
                 "Agar owner ne YT_COOKIES env set kiya ho to hi aise videos aayenge."
             )
+        if "Requested format is not available" in msg:
+            raise Exception(
+                "Is YouTube video ke liye requested format available nahi hai.\n"
+                "Koi aur quality/normal public video try karo."
+            )
         raise Exception(f"YouTube se info nahi mil paayi: {msg}")
 
-    direct_url = info.get("url")
-    # Agar top-level url nahi mila to playlist/entry se try karo
-    if not direct_url and "entries" in info and info["entries"]:
-        direct_url = info["entries"][0].get("url")
+    formats = info.get("formats") or []
+    if not formats:
+        raise Exception("YouTube ne koi formats return nahi kiye.")
 
-    if not direct_url:
-        raise Exception("YouTube ne direct URL return nahi kiya.")
+    # Sabse accha usable format choose karo (progressive+mp4 prefer)
+    best = None  # (score, format_dict)
+    for f in formats:
+        url_f = f.get("url")
+        if not url_f:
+            continue
 
-    ext = info.get("ext") or "mp4"
+        score = 0
+        # Progressive (audio+video dono) ko zyada weight
+        if f.get("acodec") != "none" and f.get("vcodec") != "none":
+            score += 1000
+        # mp4 ko prefer karo
+        if f.get("ext") == "mp4":
+            score += 100
+        # resolution bhi score me add
+        try:
+            score += int(f.get("height") or 0)
+        except Exception:
+            pass
+
+        if (best is None) or (score > best[0]):
+            best = (score, f)
+
+    if not best:
+        raise Exception("YouTube ka koi usable direct format nahi mila.")
+
+    f = best[1]
+    direct_url = f["url"]
+    ext = f.get("ext") or "mp4"
     title = info.get("title") or "YouTube_Video"
-    safe_title = "".join(c for c in title if c not in r'\/:*?"<>|')
+    safe_title = "".join(c for c in title if c not in r'\/:*?\"<>|')
     filename = f"{safe_title}.{ext}"
     return direct_url, filename
 
