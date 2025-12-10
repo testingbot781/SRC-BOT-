@@ -139,6 +139,17 @@ async def settings_cb(_,q):
         await q.message.reply_text("♻️ Caption cleared successfully !")
     await q.answer()
 
+# caption input catcher
+@bot.on_message(filters.private & filters.text)
+async def get_user_caption(_,m):
+    u=users.find_one({"_id":m.from_user.id})
+    if u and u.get("waiting_cap"):
+        users.update_one({"_id":m.from_user.id},{"$set":{"caption":m.text,"waiting_cap":False}})
+        await m.reply_text(f"✅ Caption saved → `{m.text}`",parse_mode="markdown")
+        return
+    # fall through to detector below
+    await detect(_,m)
+
 @bot.on_message(filters.command("file"))
 async def file(_,m):
     if len(m.command)<2: 
