@@ -266,9 +266,10 @@ def progress_text(title: str, current: int, total: int | None,
 )
 # ===== DOWNLOADERS =====
 
-async def download_direct(url, dest, status_msg, uid, title):
+async def download_direct(url, dest, status_msg, uid, title, headers=None):
     start = time.time()
-    async with aiohttp.ClientSession() as sess:
+    session_headers = headers or {}
+    async with aiohttp.ClientSession(headers=session_headers) as sess:
         async with sess.get(url) as resp:
             if resp.status == 403:
                 raise Exception(
