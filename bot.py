@@ -392,11 +392,13 @@ async def download_m3u8(url, dest, status_msg, uid, title):
 async def get_youtube_direct(url: str):
     loop = asyncio.get_running_loop()
 
-    def _extract():
+    def _extract(fmt: str):
         ydl_opts = {
             "quiet": True,
             "skip_download": True,
             "noplaylist": True,
+            # Pehle progressive MP4 try karo, nahi mila to fallback
+            "format": fmt,
             "extractor_args": {
                 "youtube": {"player_client": ["android", "web"]},
             },
@@ -407,7 +409,20 @@ async def get_youtube_direct(url: str):
             return ydl.extract_info(url, download=False)
 
     try:
-        info = await loop.run_in_executor(None, _extract)
+        # 1st try: best progressive MP4
+        try:
+            info = await loop.run_in_executor(
+                None, _extract, "best[ext=mp4]/best"
+            )
+        except DownloadError as e:
+            msg = str(e)
+            # Agar yehi error hai jo tumhe mila hai to fallback "best" pe
+            if "Requested format is not available" in msg:
+                info = await loop.run_in_executor(
+                    None, _extract, "best"
+                )
+            else:
+                raise
     except Exception as e:
         msg = str(e)
         if "Sign in to confirm you’re not a bot" in msg or \
@@ -418,9 +433,15 @@ async def get_youtube_direct(url: str):
             )
         raise Exception(f"YouTube se info nahi mil paayi: {msg}")
 
-    formats = info.get("formats", [])
-    best = None
-    for f in formats:
+    direct_url = info.get("url")
+    if not direct_url:
+        raise Exception("YouTube ne direct URL return nahi kiya.")
+
+    ext = info.get("ext") or "mp4"
+    title = info.get("title") or "YouTube_Video"
+    safe_title = "".join(c for c in title if c not in r'\/:*?"<>|')
+    filename = f"{safe_title}.{ext}"
+    return direct_url, filename
         if (
             f.get("acodec") != "none"
             and f.get("vcodec") != "none"
