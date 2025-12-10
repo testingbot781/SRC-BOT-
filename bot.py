@@ -284,36 +284,62 @@ async def download_m3u8(url, dest, status_msg, uid, title):
     start = time.time()
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resp:
+            if resp.status != 200:
+                raise Exception(f"m3u8 HTTP {resp.status}")
             text = await resp.text()
+            content_type = resp.headers.get("Content-Type", "")
+
+    if "#EXTM3U" not in text:
+        raise Exception(
+            "Yeh valid .m3u8 playlist nahi lagti (missing #EXTM3U).\n"
+            "Sahi media/master .m3u8 link bhejo (DRM ya login-protected stream nahi chalega)."
+        )
+
     pl = m3u8.loads(text)
     base_url = url
 
+    # Master playlist ho to best variant pick karo
     if pl.is_variant and pl.playlists:
-        best = max(
-            pl.playlists,
-            key=lambda p: (p.stream_info.bandwidth or 0)
-        )
+        best = max(pl.playlists, key=lambda p: (p.stream_info.bandwidth or 0))
         media_url = urljoin(url, best.uri)
         async with aiohttp.ClientSession() as session:
             async with session.get(media_url) as resp:
+                if resp.status != 200:
+                    raise Exception(f"variant m3u8 HTTP {resp.status}")
                 text = await resp.text()
         pl = m3u8.loads(text)
         base_url = media_url
 
-    segments = pl.segments
-    total_seg = len(segments)
-    if total_seg == 0:
-        raise Exception("No segments found in m3u8")
+    segments = list(pl.segments)
 
+    # Agar library ko segments na milen to manual parse try karo
+    if not segments:
+        lines = [
+            l.strip()
+            for l in text.splitlines()
+            if l.strip() and not l.strip().startswith("#")
+        ]
+        if not lines:
+            raise Exception(
+                "Is m3u8 file me koi segments nahi mile.\n"
+                "Yeh DRM/login protected stream ya galat link ho sakta hai."
+            )
+        segment_urls = [urljoin(base_url, l) for l in lines]
+    else:
+        segment_urls = [urljoin(base_url, s.uri) for s in segments]
+
+    total_seg = len(segment_urls)
     downloaded = 0
     last = 0
+
     with open(dest, "wb") as out:
         async with aiohttp.ClientSession() as session:
-            for idx, seg in enumerate(segments, start=1):
+            for idx, seg_url in enumerate(segment_urls, start=1):
                 if not ACTIVE_TASKS.get(uid):
                     raise Exception("Task cancelled")
-                seg_url = urljoin(base_url, seg.uri)
                 async with session.get(seg_url) as resp:
+                    if resp.status != 200:
+                        raise Exception(f"segment HTTP {resp.status}")
                     async for chunk in resp.content.iter_chunked(512 * 1024):
                         if not chunk:
                             continue
@@ -330,6 +356,7 @@ async def download_m3u8(url, dest, status_msg, uid, title):
                     except Exception:
                         pass
                     last = now
+
     return dest
 
 async def get_youtube_direct(url: str):
