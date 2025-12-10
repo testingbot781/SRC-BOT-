@@ -1,6 +1,5 @@
 import os
 import time
-import math
 import asyncio
 import threading
 from datetime import date
@@ -18,6 +17,7 @@ from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import FloodWait, UserIsBlocked, InputUserDeactivated, RPCError
 
+# ===== ENV =====
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 BOT_TOKEN = os.environ["BOT_TOKEN"]
@@ -44,11 +44,13 @@ if YT_COOKIES_STR:
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
+# ===== DB =====
 mongo = MongoClient(MONGO_URL)
 db = mongo["serena"]
 users = db["users"]
 files = db["files"]
 
+# ===== BOT =====
 bot = Client(
     "serena-url-bot",
     api_id=API_ID,
@@ -57,6 +59,7 @@ bot = Client(
     parse_mode=enums.ParseMode.MARKDOWN,
 )
 
+# ===== FLASK (for Render) =====
 app = Flask(__name__)
 
 
@@ -70,9 +73,11 @@ def run_flask():
     app.run(host="0.0.0.0", port=port)
 
 
-ACTIVE_TASKS = {}
+ACTIVE_TASKS = {}       # user_id -> bool
 AWAITING_CAPTION = set()
 
+
+# ===== HELPERS =====
 
 def owner_filter():
     return filters.user(list(OWNER_IDS))
@@ -259,6 +264,7 @@ def progress_text(title: str, current: int, total: int | None,
         f"◌Speed🚀:〘 {speed:.2f} MB/s 〙\n"
         f"◌Time Left⏳:〘 {eta_str} 〙"
 )
+# ===== DOWNLOADERS =====
 
 async def download_direct(url, dest, status_msg, uid, title):
     start = time.time()
@@ -397,7 +403,6 @@ async def get_youtube_direct(url: str):
             "quiet": True,
             "skip_download": True,
             "noplaylist": True,
-            # Pehle progressive MP4 try karo, nahi mila to fallback
             "format": fmt,
             "extractor_args": {
                 "youtube": {"player_client": ["android", "web"]},
@@ -409,24 +414,22 @@ async def get_youtube_direct(url: str):
             return ydl.extract_info(url, download=False)
 
     try:
-        # 1st try: best progressive MP4
         try:
+            # Pehle progressive MP4/best try
             info = await loop.run_in_executor(
                 None, _extract, "best[ext=mp4]/best"
             )
         except DownloadError as e:
             msg = str(e)
-            # Agar yehi error hai jo tumhe mila hai to fallback "best" pe
             if "Requested format is not available" in msg:
-                info = await loop.run_in_executor(
-                    None, _extract, "best"
-                )
+                # Fallback: generic best
+                info = await loop.run_in_executor(None, _extract, "best")
             else:
                 raise
     except Exception as e:
         msg = str(e)
-        if "Sign in to confirm you’re not a bot" in msg or \
-           "Sign in to confirm you're not a bot" in msg:
+        if ("Sign in to confirm you’re not a bot" in msg) or \
+           ("Sign in to confirm you're not a bot" in msg):
             raise Exception(
                 "Ye YouTube video login/cookies ke bina download nahi ho sakta.\n"
                 "Agar owner ne YT_COOKIES env set kiya ho to hi aise videos aayenge."
@@ -434,30 +437,15 @@ async def get_youtube_direct(url: str):
         raise Exception(f"YouTube se info nahi mil paayi: {msg}")
 
     direct_url = info.get("url")
+    # Agar top-level url nahi mila to playlist/entry se try karo
+    if not direct_url and "entries" in info and info["entries"]:
+        direct_url = info["entries"][0].get("url")
+
     if not direct_url:
         raise Exception("YouTube ne direct URL return nahi kiya.")
 
     ext = info.get("ext") or "mp4"
     title = info.get("title") or "YouTube_Video"
-    safe_title = "".join(c for c in title if c not in r'\/:*?"<>|')
-    filename = f"{safe_title}.{ext}"
-    return direct_url, filename
-        if (
-            f.get("acodec") != "none"
-            and f.get("vcodec") != "none"
-            and f.get("url")
-            and f.get("ext") in ("mp4", "webm", "mkv")
-        ):
-       
-
-            if not best or (f.get("height", 0) > best.get("height", 0)):
-                best = f
-    if not best:
-        raise Exception("YouTube ka koi direct progressive format nahi mila.")
-
-    direct_url = best["url"]
-    ext = best.get("ext", "mp4")
-    title = info.get("title", "YouTube_Video")
     safe_title = "".join(c for c in title if c not in r'\/:*?"<>|')
     filename = f"{safe_title}.{ext}"
     return direct_url, filename
@@ -657,7 +645,9 @@ async def handle_url(client, m):
             try:
                 os.remove(path)
             except Exception:
-                pass  
+                pass     
+# ===== GF CHAT (optional) =====
+
 async def ai_gf_reply(user_id: int, text: str) -> str:
     if not OPENAI_API_KEY:
         raise Exception("GF chat disabled by owner (API key set nahi hai).")
@@ -683,6 +673,8 @@ async def ai_gf_reply(user_id: int, text: str) -> str:
 
     return await loop.run_in_executor(None, _call)
 
+
+# ===== COMMANDS =====
 
 @bot.on_message(filters.command("start") & filters.private)
 async def start_cmd(client, m):
