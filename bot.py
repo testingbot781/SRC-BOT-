@@ -481,20 +481,22 @@ async def download_media(url, status_msg, uid):
         dest = await download_m3u8(url, dest, status_msg, uid, title)
         is_video = True
         fname = os.path.basename(dest)
+
     elif kind == "yt":
-    yt_url, yt_name, yt_headers = await get_youtube_direct(url)
-    dest = os.path.join(DOWNLOAD_DIR, yt_name)
-    title = yt_name
-    dest = await download_direct(
-        yt_url,
-        dest,
-        status_msg,
-        uid,
-        title,
-        headers=yt_headers
-    )
-    is_video = True
-    fname = yt_name
+        yt_url, yt_name, yt_headers = await get_youtube_direct(url)
+        dest = os.path.join(DOWNLOAD_DIR, yt_name)
+        title = yt_name
+        dest = await download_direct(
+            yt_url,
+            dest,
+            status_msg,
+            uid,
+            title,
+            headers=yt_headers,
+        )
+        is_video = True
+        fname = yt_name
+
     else:
         title = fname
         dest = await download_direct(url, dest, status_msg, uid, title)
