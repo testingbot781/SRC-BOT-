@@ -400,7 +400,7 @@ async def get_youtube_direct(url: str):
     loop = asyncio.get_running_loop()
 
     def _extract():
-        # Yahan hum koi "format" string set nahi kar rahe
+        # Yahan hum "format" string nahi de rahe, yt-dlp khud decide karega
         ydl_opts = {
             "quiet": True,
             "skip_download": True,
@@ -432,7 +432,6 @@ async def get_youtube_direct(url: str):
     if not formats:
         raise Exception("YouTube ne koi formats return nahi kiye.")
 
-    # Sabse accha usable format choose karo (progressive+mp4 prefer)
     best = None  # (score, format_dict)
     for f in formats:
         url_f = f.get("url")
@@ -440,13 +439,10 @@ async def get_youtube_direct(url: str):
             continue
 
         score = 0
-        # Progressive (audio+video dono) ko zyada weight
         if f.get("acodec") != "none" and f.get("vcodec") != "none":
             score += 1000
-        # mp4 ko prefer karo
         if f.get("ext") == "mp4":
             score += 100
-        # resolution bhi score me add
         try:
             score += int(f.get("height") or 0)
         except Exception:
@@ -460,11 +456,14 @@ async def get_youtube_direct(url: str):
 
     f = best[1]
     direct_url = f["url"]
+    headers = f.get("http_headers") or info.get("http_headers") or {}
+
     ext = f.get("ext") or "mp4"
     title = info.get("title") or "YouTube_Video"
     safe_title = "".join(c for c in title if c not in r'\/:*?\"<>|')
     filename = f"{safe_title}.{ext}"
-    return direct_url, filename
+
+    return direct_url, filename, headers
 
 
 async def download_media(url, status_msg, uid):
