@@ -165,67 +165,70 @@ async def pop_q(uid):
     return url
 
 # ---------- CORE ----------
-async def process(m,url):
+async def process(url,m):
     uid=m.from_user.id
+    data=users.find_one({"_id":uid}) or {}
+    mode=data.get("opt","video")
+    caption=data.get("caption","")
+    tmp=tempfile.gettempdir()
+    name="file.bin";path=os.path.join(tmp,name)
     msg=await m.reply_text("📥 Starting download …")
-    name="file.bin"
     try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(url,allow_redirects=True) as r:
-                total=int(r.headers.get("Content-Length",0))
-                cd=r.headers.get("Content-Disposition")
-                if cd and "filename=" in cd:
-                    name=cd.split("filename=")[-1].strip('"; ')
-                else:
-                    ct=r.headers.get("Content-Type","")
-                    ext=mimetypes.guess_extension(ct.split(";")[0].strip()) or ".bin"
-                    base=os.path.basename(url.split("?")[0]) or "file"
-                    name=base if "." in base else base+ext
-                done,start,last=0,time.time(),0
-                with open(name,"wb") as f:
-                    async for chunk in r.content.iter_chunked(1024*512):
-                        if cancel_flag.get(uid): 
-                            await msg.edit_text("🛑 Cancelled.")
-                            return
-                        f.write(chunk); done+=len(chunk)
-                        now=time.time()
-                        if now-last>10: # 10 s interval
-                            spd=done/max(now-start,1)
-                            try: await msg.edit_text(make_block(name,"⬇️ Downloading",done,total,spd))
-                            except FloodWait as e: await asyncio.sleep(e.value)
-                            except: pass
-                            last=now
-        # upload to logs
-        await msg.edit_text("📦 Uploading backup …")
-        start=time.time()
-        async def prog(c,t):
-            if cancel_flag.get(uid): raise asyncio.CancelledError
-            if (time.time()-start)%10<1:
-                spd=c/max(time.time()-start,1)
-                try: asyncio.create_task(msg.edit_text(make_block(name,"📦 Backup Upload",c,t,spd)))
-                except: pass
-        logmsg=await bot.send_document(LOGS_CHANNEL,name,caption=f"📦 Backup:{name}",progress=prog)
-        # upload to user
-        await msg.edit_text("📤 Sending to you …")
-        start=time.time()
-        async def uprog(c,t):
-            if cancel_flag.get(uid): raise asyncio.CancelledError
-            if (time.time()-start)%10<1:
-                spd=c/max(time.time()-start,1)
-                try: asyncio.create_task(msg.edit_text(make_block(name,"📤 Uploading to User",c,t,spd)))
-                except: pass
-        await bot.send_document(uid,name,caption=f"`{name}`",
-            progress=uprog,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Contact Owner",url="https://t.me/technicalserena")]]))
-        files.insert_one({"name":name,"file_id":logmsg.document.file_id,"type":"document"})
+        if ".m3u8" in url:
+            name="video.mp4";path=os.path.join(tmp,name)
+            await msg.edit_text("🎞️ **Fetching M3U8 stream …**")
+            ok=await m3u8_to_mp4(url,path)
+            if not ok:return await msg.edit_text("⚠️ Failed to fetch stream!")
+        elif "instagram.com" in url:
+            name="insta.mp4";path=os.path.join(tmp,name)
+            await msg.edit_text("📸 **Fetching Instagram video…**")
+            ok=await insta_dl(url,path)
+            if not ok:return await msg.edit_text("⚠️ Cannot download Instagram video.")
+        else:
+            async with aiohttp.ClientSession() as s:
+                async with s.get(url,allow_redirects=True) as r:
+                    total=int(r.headers.get("Content-Length",0))
+                    cd=r.headers.get("Content-Disposition")
+                    if cd and "filename=" in cd:
+                        name=cd.split("filename=")[-1].strip('\"; ')
+                    else:
+                        ct=r.headers.get("Content-Type","")
+                        ext=mimetypes.guess_extension(ct.split(";")[0].strip()) or ".bin"
+                        base=os.path.basename(url.split("?")[0]) or "file"
+                        name=base if "." in base else base+ext
+                    path=os.path.join(tmp,name)
+                    done,start,last=0,time.time(),0
+                    with open(path,"wb") as f:
+                        async for chunk in r.content.iter_chunked(1024*512):
+                            if cancel.get(uid):await msg.edit_text("🛑 Cancelled by user");return
+                            f.write(chunk);done+=len(chunk)
+                            now=time.time()
+                            if now-last>10:
+                                spd=done/max(now-start,1)
+                                try:await msg.edit_text(fancy_bar(name,"⬇️ Downloading",done,total,spd))
+                                except FloodWait as e:await asyncio.sleep(e.value)
+                                except:pass
+                                last=now
+        await msg.edit_text("📦 **Uploading backup to Logs…**")
+        caption_final = (caption + "\n" if caption else "") + f"`{name}`"
+        logm=await log_file(path,f"📦 Backup:{name}\n\n{caption_final}")
+        await msg.edit_text("📤 **Uploading to you…**")
+        if mode=="video":
+            await bot.send_video(uid,path,caption=caption_final,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Owner",url="https://t.me/technicalserena")]]))
+        else:
+            await bot.send_document(uid,path,caption=caption_final,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Owner",url="https://t.me/technicalserena")]]))
+        files.insert_one({"name":name,"file_id":logm.document.file_id,"type":mode,"caption":caption})
         await msg.delete()
-        await log_text(f"✅ Delivered {name} to {uid}")
+        await log_msg(f"✅ Delivered {name} to {uid}")
     except Exception as e:
         await msg.edit_text(f"❌ Error {e}")
-        await log_text(str(e))
+        await log_msg(str(e))
     finally:
-        if os.path.exists(name): os.remove(name)
-        cancel_flag[uid]=False
+        try: os.remove(path)
+        except: pass
+        cancel[uid]=False
 
 # ---------- ENTRY ----------
 if __name__=="__main__":
