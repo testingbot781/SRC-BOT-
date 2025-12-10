@@ -1,14 +1,17 @@
 import os
 import time
+import math
 import asyncio
 import threading
 from datetime import date
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 
 import aiohttp
 import psutil
+import m3u8
 from flask import Flask
 from pymongo import MongoClient
+from yt_dlp import YoutubeDL
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import FloodWait, UserIsBlocked, InputUserDeactivated, RPCError
@@ -23,8 +26,8 @@ LOGS_CHANNEL = -1003286415377
 FORCE_CH = "serenaunzipbot"
 FORCE_LINK = "https://t.me/serenaunzipbot"
 OWNER_CONTACT = "https://t.me/technicalserena"
-
 DAILY_FREE_LIMIT = 5
+
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
@@ -62,6 +65,15 @@ def owner_filter():
     return filters.user(list(OWNER_IDS))
 
 
+def main_buttons():
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("📢 Join Channel", url=FORCE_LINK)],
+            [InlineKeyboardButton("💬 Contact Owner", url=OWNER_CONTACT)],
+        ]
+    )
+
+
 def owner_button():
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton("💬 Contact Owner", url=OWNER_CONTACT)]]
@@ -85,8 +97,8 @@ def settings_keyboard(mode: str):
             ],
             [
                 InlineKeyboardButton("➕ Add Caption", callback_data="add_cap"),
-                InlineKeyboardButton("♻️ Reset Caption", callback_data="clr_cap")
-            ]
+                InlineKeyboardButton("♻️ Reset Caption", callback_data="clr_cap"),
+            ],
         ]
     )
 
@@ -120,13 +132,20 @@ def refresh_quota(u: dict):
         u["daily_used"] = 0
         users.update_one(
             {"_id": u["_id"]},
-            {"$set": {"daily_date": today, "daily_used": 0}}
+            {"$set": {"daily_date": today, "daily_used": 0}},
         )
 
 
 def is_premium(u: dict) -> bool:
     until = u.get("premium_until")
     return bool(until and until > int(time.time()))
+
+
+async def log_text(text: str):
+    try:
+        await bot.send_message(LOGS_CHANNEL, text)
+    except Exception:
+        pass
 
 
 async def ensure_subscribed(client: Client, m):
@@ -136,14 +155,12 @@ async def ensure_subscribed(client: Client, m):
         member = await client.get_chat_member(FORCE_CH, m.from_user.id)
         if member.status in (
             enums.ChatMemberStatus.LEFT,
-            enums.ChatMemberStatus.BANNED
+            enums.ChatMemberStatus.BANNED,
         ):
             raise RPCError("not joined")
         return True
     except Exception:
-        kb = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("📢 Join Channel", url=FORCE_LINK)]]
-        )
+        kb = main_buttons()
         await m.reply_text(
             "⚠️ Bot use karne se pehle hamare channel ko join karein.\n\n"
             f"Channel: @{FORCE_CH}",
@@ -178,14 +195,66 @@ def make_name(url: str, default_ext="mp4") -> str:
     return name
 
 
-async def download_direct(url, dest, status_msg, uid):
+def sizeof_fmt(num: int) -> str:
+    if num <= 0:
+        return "0 MB"
+    return f"{num / (1024 * 1024):.2f} MB"
+
+
+def time_fmt(sec: float) -> str:
+    sec = int(sec)
+    if sec <= 0:
+        return "0s"
+    m, s = divmod(sec, 60)
+    h, m = divmod(m, 60)
+    if h > 0:
+        return f"{h}h, {m}m"
+    if m > 0:
+        return f"{m}m, {s}s"
+    return f"{s}s"
+
+
+def progress_text(title: str, current: int, total: int | None,
+                  start_time: float, stage: str) -> str:
+    now = time.time()
+    elapsed = max(1e-3, now - start_time)
+    speed = current / (1024 * 1024 * elapsed)
+
+    if total and total > 0:
+        pct = current * 100 / total
+        bar_len = 20
+        filled = int(bar_len * pct / 100)
+        bar = "●" * filled + "○" * (bar_len - filled)
+        done_str = f"{sizeof_fmt(current)} of  {sizeof_fmt(total)}"
+        remain = max(0, total - current)
+        eta = remain / max(1, current) * elapsed
+        eta_str = time_fmt(eta)
+    else:
+        pct = 0
+        bar = "●○" * 10
+        done_str = f"{sizeof_fmt(current)} of  ?"
+        eta_str = "calculating..."
+
+    return (
+        "➵⋆🪐ᴛᴇᴄʜɴɪᴄᴀʟ_sᴇʀᴇɴᴀ𓂃\n\n"
+        f"{title}\n"
+        f"{stage}\n"
+        f" [{bar}] \n"
+        f"◌Progress😉:〘 {pct:.2f}% 〙\n"
+        f"Done: 〘{done_str}〙\n"
+        f"◌Speed🚀:〘 {speed:.2f} MB/s 〙\n"
+        f"◌Time Left⏳:〘 {eta_str} 〙"
+)
+
+async def download_direct(url, dest, status_msg, uid, title):
+    start = time.time()
     async with aiohttp.ClientSession() as sess:
         async with sess.get(url) as resp:
             if resp.status != 200:
                 raise Exception(f"HTTP {resp.status}")
             total = int(resp.headers.get("Content-Length", 0))
             done = 0
-            last = time.time()
+            last = 0
             with open(dest, "wb") as f:
                 async for chunk in resp.content.iter_chunked(1024 * 1024):
                     if not ACTIVE_TASKS.get(uid):
@@ -194,50 +263,109 @@ async def download_direct(url, dest, status_msg, uid):
                         continue
                     f.write(chunk)
                     done += len(chunk)
-                    if total and time.time() - last > 3:
-                        pct = int(done * 100 / total)
-                        bar = "█" * (pct // 10) + "░" * (10 - pct // 10)
-                        mb_d = done / (1024 * 1024)
-                        mb_t = total / (1024 * 1024)
+                    now = time.time()
+                    if total and now - last > 2:
+                        txt = progress_text(title, done, total, start, "to my server")
                         try:
-                            await status_msg.edit_text(
-                                f"⬇️ Downloading {pct}%\n"
-                                f"[{bar}] {mb_d:.1f}/{mb_t:.1f} MB"
-                            )
+                            await status_msg.edit_text(txt)
                         except Exception:
                             pass
-                        last = time.time()
+                        last = now
+    if total:
+        txt = progress_text(title, total, total, start, "to my server")
+        try:
+            await status_msg.edit_text(txt)
+        except Exception:
+            pass
     return dest
 
 
-async def download_m3u8(url, dest, status_msg, uid):
-    await status_msg.edit_text("🎞 ffmpeg se stream download ho raha hai…")
-    proc = await asyncio.create_subprocess_exec(
-        "ffmpeg", "-i", url, "-c", "copy", "-bsf:a", "aac_adtstoasc", dest,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    await proc.communicate()
-    if not ACTIVE_TASKS.get(uid):
-        raise Exception("Task cancelled")
-    if proc.returncode != 0 or not os.path.exists(dest):
-        raise Exception("ffmpeg failed (m3u8)")
+async def download_m3u8(url, dest, status_msg, uid, title):
+    start = time.time()
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            text = await resp.text()
+    pl = m3u8.loads(text)
+    base_url = url
+
+    if pl.is_variant and pl.playlists:
+        best = max(
+            pl.playlists,
+            key=lambda p: (p.stream_info.bandwidth or 0)
+        )
+        media_url = urljoin(url, best.uri)
+        async with aiohttp.ClientSession() as session:
+            async with session.get(media_url) as resp:
+                text = await resp.text()
+        pl = m3u8.loads(text)
+        base_url = media_url
+
+    segments = pl.segments
+    total_seg = len(segments)
+    if total_seg == 0:
+        raise Exception("No segments found in m3u8")
+
+    downloaded = 0
+    last = 0
+    with open(dest, "wb") as out:
+        async with aiohttp.ClientSession() as session:
+            for idx, seg in enumerate(segments, start=1):
+                if not ACTIVE_TASKS.get(uid):
+                    raise Exception("Task cancelled")
+                seg_url = urljoin(base_url, seg.uri)
+                async with session.get(seg_url) as resp:
+                    async for chunk in resp.content.iter_chunked(512 * 1024):
+                        if not chunk:
+                            continue
+                        out.write(chunk)
+                        downloaded += len(chunk)
+                now = time.time()
+                if now - last > 2:
+                    pct = idx * 100 / total_seg
+                    txt = progress_text(
+                        title, downloaded, None, start, "to my server"
+                    ) + f"\n(segments: {idx}/{total_seg}, ~{pct:.1f}%)"
+                    try:
+                        await status_msg.edit_text(txt)
+                    except Exception:
+                        pass
+                    last = now
     return dest
 
 
-async def download_yt(url, dest, status_msg, uid):
-    await status_msg.edit_text("🎬 yt-dlp se YouTube video aa raha hai…")
-    proc = await asyncio.create_subprocess_exec(
-        "yt-dlp", "-f", "best", "-o", dest, url,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    await proc.communicate()
-    if not ACTIVE_TASKS.get(uid):
-        raise Exception("Task cancelled")
-    if proc.returncode != 0 or not os.path.exists(dest):
-        raise Exception("yt-dlp failed")
-    return dest
+async def get_youtube_direct(url: str):
+    loop = asyncio.get_running_loop()
+
+    def _extract():
+        ydl_opts = {
+            "quiet": True,
+            "skip_download": True,
+            "noplaylist": True,
+        }
+        with YoutubeDL(ydl_opts) as ydl:
+            return ydl.extract_info(url, download=False)
+
+    info = await loop.run_in_executor(None, _extract)
+    formats = info.get("formats", [])
+    best = None
+    for f in formats:
+        if (
+            f.get("acodec") != "none"
+            and f.get("vcodec") != "none"
+            and f.get("url")
+            and f.get("ext") in ("mp4", "webm", "mkv")
+        ):
+            if not best or (f.get("height", 0) > best.get("height", 0)):
+                best = f
+    if not best:
+        raise Exception("No progressive format found for YouTube")
+
+    direct_url = best["url"]
+    ext = best.get("ext", "mp4")
+    title = info.get("title", "YouTube_Video")
+    safe_title = "".join(c for c in title if c not in r'\/:*?"<>|')
+    filename = f"{safe_title}.{ext}"
+    return direct_url, filename
 
 
 async def download_media(url, status_msg, uid):
@@ -248,45 +376,40 @@ async def download_media(url, status_msg, uid):
 
     if kind == "mega":
         raise Exception("Mega links abhi supported nahi hain.")
+
     if kind == "m3u8":
+        title = os.path.basename(dest) or "m3u8_video.mp4"
         dest = os.path.join(DOWNLOAD_DIR, f"m3u8_{int(time.time())}.mp4")
-        dest = await download_m3u8(url, dest, status_msg, uid)
+        dest = await download_m3u8(url, dest, status_msg, uid, title)
         is_video = True
         fname = os.path.basename(dest)
     elif kind == "yt":
-        dest = os.path.join(DOWNLOAD_DIR, f"yt_{int(time.time())}.mp4")
-        dest = await download_yt(url, dest, status_msg, uid)
+        yt_url, yt_name = await get_youtube_direct(url)
+        dest = os.path.join(DOWNLOAD_DIR, yt_name)
+        title = yt_name
+        dest = await download_direct(yt_url, dest, status_msg, uid, title)
         is_video = True
-        fname = os.path.basename(dest)
+        fname = yt_name
     else:
-        await status_msg.edit_text("⬇️ Direct download start ho raha hai…")
-        dest = await download_direct(url, dest, status_msg, uid)
+        title = fname
+        dest = await download_direct(url, dest, status_msg, uid, title)
 
     return dest, fname, is_video
 
 
 async def upload_media(client, m, path, title, is_video, u, status_msg):
     start = time.time()
-    last = 0
 
     async def progress(current, total):
-        nonlocal last
-        now = time.time()
-        if now - last < 3 or not total:
-            return
-        last = now
-        pct = int(current * 100 / total)
-        bar = "█" * (pct // 10) + "░" * (10 - pct // 10)
-        mb_d = current / (1024 * 1024)
-        mb_t = total / (1024 * 1024)
-        speed = current / (1024 * 1024 * max(1e-3, now - start))
-        eta = (total - current) / max(1, current) * (now - start)
+        txt = progress_text(
+            title,
+            current,
+            total,
+            start,
+            "to Telegram"
+        )
         try:
-            await status_msg.edit_text(
-                f"📤 Upload {pct}%\n"
-                f"[{bar}] {mb_d:.1f}/{mb_t:.1f} MB\n"
-                f"⚡ {speed:.1f} MB/s | ⏳ {int(eta)}s"
-            )
+            await status_msg.edit_text(txt)
         except Exception:
             pass
 
@@ -302,14 +425,14 @@ async def upload_media(client, m, path, title, is_video, u, status_msg):
             path,
             caption=caption,
             progress=progress,
-            reply_markup=owner_button()
+            reply_markup=owner_button(),
         )
     else:
         sent = await m.reply_document(
             path,
             caption=caption,
             progress=progress,
-            reply_markup=owner_button()
+            reply_markup=owner_button(),
         )
     return sent
 
@@ -345,19 +468,20 @@ async def save_and_log(m, path, title, url, sent):
                     LOGS_CHANNEL,
                     fid,
                     caption=cap,
-                    reply_markup=owner_button()
+                    reply_markup=owner_button(),
                 )
             else:
                 await bot.send_document(
                     LOGS_CHANNEL,
                     fid,
                     caption=cap,
-                    reply_markup=owner_button()
+                    reply_markup=owner_button(),
                 )
         else:
             await bot.send_message(LOGS_CHANNEL, cap)
     except Exception as e:
         print("log error:", e)
+        await log_text(f"Log error: {e}")
 
 
 async def wrong_link(m):
@@ -413,7 +537,7 @@ async def handle_url(client, m):
         now = int(time.time())
         upd = {
             "last_seen": now,
-            "total_tasks": u.get("total_tasks", 0) + 1
+            "total_tasks": u.get("total_tasks", 0) + 1,
         }
         if not is_premium(u):
             upd["daily_used"] = u.get("daily_used", 0) + 1
@@ -427,6 +551,7 @@ async def handle_url(client, m):
         await status.delete()
     except Exception as e:
         print("process error:", e)
+        await log_text(f"Error for {m.from_user.id}: {e}")
         try:
             await status.edit_text(f"❌ Error: `{e}`")
         except Exception:
@@ -439,18 +564,21 @@ async def handle_url(client, m):
             except Exception:
                 pass
 
-
 @bot.on_message(filters.command("start") & filters.private)
 async def start_cmd(client, m):
     if not await ensure_subscribed(client, m):
         return
     get_user(m.from_user.id)
-    await m.reply_text(
+    await log_text(f"#START from {m.from_user.id} ({m.from_user.first_name})")
+    txt = (
         "🌸 **Welcome to SERENA URL Downloader**\n\n"
-        "Bas mujhe koi direct URL, `.m3u8` ya YouTube link bhejo,\n"
+        "🔗 Mujhe koi bhi direct URL, `.m3u8` ya YouTube link bhejo,\n"
         "main usse download karke Telegram file/video bana dungi.\n\n"
+        f"• Free Users: {DAILY_FREE_LIMIT} downloads / day\n"
+        "• Premium Users: Unlimited\n\n"
         "ℹ️ Full guide ke liye `/help` dekho."
     )
+    await m.reply_text(txt, reply_markup=main_buttons())
 
 
 @bot.on_message(filters.command("help") & filters.private)
@@ -459,10 +587,10 @@ async def help_cmd(client, m):
         return
     txt = (
         "🌸 **SERENA – Ultimate URL Downloader**\n\n"
-        "🧿 **What I Can Do**\n"
+        "🧿 **Main Kya Kar Sakti Hoon**\n"
         "• Direct downloadable links (mp4, mkv, zip, etc.) se file laati hoon.\n"
         "• `.m3u8` HLS streams ko MP4 video me convert karti hoon.\n"
-        "• YouTube videos ko best quality me download karti hoon.\n"
+        "• YouTube videos ko best possible progressive quality me download karti hoon.\n"
         "• Har upload database me save hota hai, baad me `/file` se mil jata hai.\n\n"
         "💫 **Limits & Premium**\n"
         f"• Free Users: {DAILY_FREE_LIMIT} downloads / day\n"
@@ -481,7 +609,7 @@ async def help_cmd(client, m):
         "`/clear` – saari saved files clear\n"
         "`/broadcast Hello sabko` – mass message\n"
         "`/premium 123456789 12` – user ko 22 din premium\n\n"
-        "🔰 **Use Example**\n"
+        "🔰 **Use Examples**\n"
         "• Direct: `https://example.com/video.mp4`\n"
         "• YouTube: `https://youtu.be/abc123`\n"
         "• Stream: `https://site.com/hls/index.m3u8`\n\n"
@@ -501,7 +629,7 @@ async def settings_cmd(client, m):
         f"⚙️ **Upload Settings**\n\n"
         f"Mode: **{'Video' if mode == 'video' else 'Document'}**\n"
         f"Caption:\n{cap}",
-        reply_markup=settings_keyboard(mode)
+        reply_markup=settings_keyboard(mode),
     )
 
 
@@ -522,7 +650,9 @@ async def callbacks(client, cq):
     elif data == "add_cap":
         AWAITING_CAPTION.add(uid)
         await cq.answer()
-        await cq.message.reply_text("✏️ Apna custom caption bhejo (normal message).")
+        await cq.message.reply_text(
+            "✏️ Apna custom caption bhejo (normal message)."
+        )
     elif data == "clr_cap":
         users.update_one({"_id": uid}, {"$set": {"caption": ""}})
         await cq.answer("✅ Caption reset.")
@@ -565,16 +695,17 @@ async def file_cmd(client, m):
                 await m.reply_video(
                     fid,
                     caption=cap,
-                    reply_markup=owner_button()
+                    reply_markup=owner_button(),
                 )
             else:
                 await m.reply_document(
                     fid,
                     caption=cap,
-                    reply_markup=owner_button()
+                    reply_markup=owner_button(),
                 )
         except Exception as e:
             print("send db error:", e)
+            await log_text(f"DB send error: {e}")
         await asyncio.sleep(1)
 
 
@@ -640,7 +771,9 @@ async def premium_cmd(client, m):
     total_days = base_days + extra
     until = int(time.time()) + total_days * 86400
     get_user(target)
-    users.update_one({"_id": target}, {"$set": {"premium_until": until}}, upsert=True)
+    users.update_one(
+        {"_id": target}, {"$set": {"premium_until": until}}, upsert=True
+    )
     await m.reply_text(f"✅ `{target}` ko {total_days} din ka Premium de diya.")
 
 
@@ -673,6 +806,7 @@ async def status_cmd(client, m):
     )
     await msg.edit_text(txt)
 
+
 @bot.on_message(filters.command("database") & owner_filter() & filters.private)
 async def database_cmd(client, m):
     stats = db.command("dbstats")
@@ -686,6 +820,7 @@ async def database_cmd(client, m):
         f"🧮 Total File : {total_files}"
     )
     await m.reply_text(txt)
+
 
 @bot.on_message(filters.command("clear") & owner_filter() & filters.private)
 async def clear_cmd(client, m):
@@ -725,8 +860,9 @@ async def broadcast_cmd(client, m):
         except Exception:
             failed += 1
         await asyncio.sleep(0.05)
-    
+
     await msg.edit_text(f"✅ Broadcast done.\nSent: {sent}\nFailed: {failed}")
+
 
 @bot.on_message(
     filters.private
@@ -769,3 +905,5 @@ async def text_handler(client, m):
 if __name__ == "__main__":
     threading.Thread(target=run_flask).start()
     bot.run()
+                
+                      
