@@ -1,13 +1,14 @@
 import os
 import time
+# ...
+
+PROGRESS_INTERVAL = int(os.environ.get("PROGRESS_INTERVAL", "5"))
 import asyncio
 import threading
 import os
 import time
 import aiohttp
-# ...
 
-PROGRESS_INTERVAL = int(os.environ.get("PROGRESS_INTERVAL", "5"))
 from datetime import date
 from urllib.parse import urlparse, urljoin
 
