@@ -2,6 +2,12 @@ import os
 import time
 import asyncio
 import threading
+import os
+import time
+import aiohttp
+# ...
+
+PROGRESS_INTERVAL = int(os.environ.get("PROGRESS_INTERVAL", "5"))
 from datetime import date
 from urllib.parse import urlparse, urljoin
 
@@ -294,7 +300,7 @@ async def download_direct(url, dest, status_msg, uid, title, headers=None):
                     f.write(chunk)
                     done += len(chunk)
                     now = time.time()
-                    if total and now - last > 2:
+                    if total and now - last > PROGRESS_INTERVAL:
                         txt = progress_text(title, done, total, start, "to my server")
                         try:
                             await status_msg.edit_text(txt)
