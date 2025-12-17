@@ -516,52 +516,49 @@ async def download_media(url, status_msg, uid):
 
 async def upload_media(client, m, path, title, is_video, u, status_msg):
     start = time.time()
+    last_edit = {"t": 0.0}  # closure ke liye dict
 
- start = time.time()
-last_edit = {"t": 0.0}  # closure ke liye dict
+    async def progress(current, total):
+        now = time.time()
+        # Agar last edit se PROGRESS_INTERVAL second nahi hue, to skip karo
+        if now - last_edit["t"] < PROGRESS_INTERVAL:
+            return
+        last_edit["t"] = now
 
-async def progress(current, total):
-    now = time.time()
-    # Agar last edit se PROGRESS_INTERVAL second nahi hue, to skip karo
-    if now - last_edit["t"] < PROGRESS_INTERVAL:
-        return
-    last_edit["t"] = now
+        txt = progress_text(
+            title,
+            current,
+            total,
+            start,
+            "to Telegram",
+        )
+        try:
+            await status_msg.edit_text(txt)
+        except Exception:
+            pass
 
-    txt = progress_text(
-        title,
-        current,
-        total,
-        start,
-        "to Telegram",
-    )
-    try:
-        await status_msg.edit_text(txt)
-    except Exception:
-        pass
+    caption = title
+    extra = u.get("caption") or ""
+    if extra:
+        caption += f"\n{extra}"
 
-caption = title
-extra = u.get("caption") or ""
-if extra:
-    caption += f"\n{extra}"
-
-mode = u.get("upload_mode", "video")
-as_video = is_video and mode == "video"
-if as_video:
-    sent = await m.reply_video(
-        path,
-        caption=caption,
-        progress=progress,
-        reply_markup=owner_button(),
-    )
-else:
-    sent = await m.reply_document(
-        path,
-        caption=caption,
-        progress=progress,
-        reply_markup=owner_button(),
-    )
-return sent
-
+    mode = u.get("upload_mode", "video")
+    as_video = is_video and mode == "video"
+    if as_video:
+        sent = await m.reply_video(
+            path,
+            caption=caption,
+            progress=progress,
+            reply_markup=owner_button(),
+        )
+    else:
+        sent = await m.reply_document(
+            path,
+            caption=caption,
+            progress=progress,
+            reply_markup=owner_button(),
+        )
+    return sent
 
 async def save_and_log(m, path, title, url, sent):
     try:
